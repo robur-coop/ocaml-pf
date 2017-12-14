@@ -83,8 +83,7 @@ let iana_icmp_types =
     "decrypt-fail", 3; (*photuris :  Decryption failed    *)
   ]
 
-type negation = Not | Yes
-let a_negation = option Yes (char '!' *> return Not)
+let a_negated : bool t = option false (char '!' *> return true)
 
 let is_whitespace = function ' ' | '\t' -> true | _ -> false
 let is_quote = function '"' -> true | _ -> false
@@ -188,12 +187,13 @@ let a_name_or_macro ~candidates : pf_name_or_macro t =
 
 let a_interface_name = a_name_or_macro ~candidates:None
 
-type pf_ifspec = If_list of (negation * pf_name_or_macro) list
+type pf_ifspec = If_list of (bool * pf_name_or_macro) list
+(* negated, name or macro*)
 
 let a_ifspec : pf_ifspec t =
   a_ign_whitespace *>
   a_match_or_list '{'
-    ( a_negation >>= fun neg ->
+    ( a_negated >>= fun neg ->
       a_interface_name >>| fun ifn -> (neg, ifn)
     ) >>| fun ifl -> If_list ifl
 
@@ -353,31 +353,31 @@ let a_if_or_cidr : if_or_cidr t =
             | Some cidr -> return (CIDR cidr)
           end
         | None ->
-          return
-          @@ CIDR ( begin match ip with
-              | V4 ip -> (Ipaddr.V4.to_string ip) ^ "/32"
-              | V6 ip -> (Ipaddr.V6.to_string ip) ^ "/128"
-              end
-              |> Ipaddr.Prefix.of_string_exn)
+          CIDR Ipaddr.(
+            begin match ip with
+              | V4 ip -> (V4.to_string ip) ^ "/32"
+              | V6 ip -> (V6.to_string ip) ^ "/128"
+            end
+            |> Prefix.of_string_exn ) |> return
       )
 
 let a_redirhost = a_if_or_cidr
 
 type pf_host =
-  | Table_name of negation * string
-  | Host_addr of { negation : negation;
+  | Table_name of bool * string (* negated, name *)
+  | Host_addr of { negated : bool ;
                    if_or_cidr : if_or_cidr ; }
 
 
 let a_host : pf_host t =
   (* [ "!" ] ( address [ "/" mask-bits ] | "<" string ">" )
      string == table name *)
-  a_negation >>= fun negation ->
+  a_negated >>= fun negated ->
   a_ign_whitespace *>
   (    a_if_or_cidr >>| fun if_or_cidr ->
-       Host_addr {negation; if_or_cidr}
+       Host_addr {negated; if_or_cidr}
   ) <|> ( encapsulated '<' '>' a_string >>| fun table ->
-          Table_name (negation,table))
+          Table_name (negated, table))
 
 let a_host_list : pf_host list t =
   sep_by (a_optional_comma <|> a_whitespace) a_host
@@ -682,7 +682,7 @@ type pf_filteropt =
   | Reassemble_tcp
   | Label of string
   | Tag of string
-  | Tagged of negation * string
+  | Tagged of bool * string (* negated , ... *)
   | Queue of string list
   | Rtable of int
   | Probability of int (* match n% of the time *)
@@ -714,9 +714,9 @@ let a_filteropt : pf_filteropt t =
       string "allow-opts" *> return Allow_opts ;
       string "label" *> a_whitespace *> (a_string >>| fun lbl -> Label lbl ) ;
       string "tag" *> a_whitespace *> (a_string >>| fun tag -> Tag tag ) ;
-      ( option Not a_negation >>= fun neg ->
+      ( a_negated >>= fun negated ->
         string "tagged" *> a_whitespace *> a_string >>| fun tag ->
-        Tagged (neg,tag)) ;
+        Tagged (negated ,tag)) ;
       string "queue" *> a_whitespace *> ( a_match_or_list '(' a_string
                                           >>| fun entries -> Queue entries) ;
       ( string "rtable" *> a_whitespace *> a_number >>| fun num -> Rtable num) ;
