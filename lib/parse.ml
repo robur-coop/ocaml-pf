@@ -814,7 +814,6 @@ let a_portspec : pf_portspec t =
                        <|> (a_raw_port_number >>| fun p -> `port p))
               ) >>| fun finish -> (start , finish)
 
-
 type pf_rdr_rule =
   { no : bool ;
     pass: pf_logopt list option option ; (*pass:Some (log:Some logopts )*)
@@ -863,6 +862,55 @@ let a_rdr_rule : pf_rdr_rule t =
   let()=Printf.eprintf "past opt pooltype, returning %S\n%!" yo in
   {no ; pass ; on ; af; proto ; hosts ; tag; tagged ; redirhosts }
 
+type nat_redirhosts =
+  { targets : if_or_cidr list ;
+    portspec : pf_portspec option ;
+    pooltype : pf_pooltype option ;
+    static_port : bool ;
+  }
+
+type pf_nat_rule =
+  { no : bool ;
+    pass : pf_logopt list option option ;
+    on : pf_ifspec option ;
+    af : pf_af option ;
+    proto : pf_protospec option ;
+    hosts : pf_hosts ;
+    tag : string option ;
+    tagged : string option ;
+    redirhosts: nat_redirhosts option ;
+  }
+
+let a_nat_rule =
+  (* TODO this is mostly code-cloned from a_rdr_rule *)
+  option false (a_ign_whitespace *> string "no" *> return true <* a_whitespace)
+  >>= fun no ->
+  a_ign_whitespace *> string "nat" *>
+    option None ( a_whitespace *> string "pass" *>
+                option None ( a_whitespace *> string "log" *>
+                              some (a_match_or_list '(' a_logopt)
+                            ) >>| fun log ->
+                Some log
+                ) >>= fun pass ->
+  option None ( a_whitespace *> string "on" *> a_whitespace *>
+                some a_ifspec ) >>= fun on ->
+  option None (a_whitespace *> some a_af) >>= fun af ->
+  option None (a_whitespace *> some a_protospec) >>= fun proto ->
+  a_whitespace *> a_hosts >>= fun hosts ->
+  option None (a_whitespace *> string "tag" *> some a_string) >>= fun tag ->
+  option None ( a_whitespace *> string "tagged" *>
+                some a_string) >>= fun tagged ->
+  option None ( a_whitespace *> string "->" *> a_ign_whitespace *>
+                a_match_or_list '{' a_redirhost >>= fun targets ->
+                option None (a_whitespace *> some a_portspec)>>= fun portspec ->
+                let()=Printf.eprintf "past opt portspec\n%!" in
+                option None (a_whitespace *> some a_pooltype)>>= fun pooltype ->
+                option false (a_whitespace *> string "static-port" *>
+                              return true ) >>| fun static_port ->
+                Some {targets; portspec ; pooltype ; static_port}
+              ) >>| fun redirhosts ->
+  {no ; pass; on; af; proto; hosts; tag; tagged; redirhosts}
+
 type pf_macro_definition = {name : string; definition : string ; }
 
 let a_macro_definition : pf_macro_definition t =
@@ -879,7 +927,9 @@ type line = Include of string
           | Macro_definition of pf_macro_definition
           | Pf_rule of pf_rule
           | Rdr_rule of pf_rdr_rule
+          | NAT_rule of pf_nat_rule
           | Set of PF_set.set_t
+
 let a_line =
   (* option | pf-rule | nat-rule | binat-rule | rdr-rule |
      antispoof-rule | altq-rule | queue-rule | trans-anchors |
@@ -891,6 +941,7 @@ let a_line =
       (a_macro_definition >>| fun macro -> Macro_definition macro) ;
       (a_rdr_rule >>| fun rule -> Rdr_rule rule) ;
       (a_pf_rule >>| fun rule -> Pf_rule rule) ;
+      (a_nat_rule >>| fun rule -> NAT_rule rule) ;
       (PF_set.a_set >>| fun set -> Set set) ;
     ]
   <* a_ign_whitespace <* end_of_input (* make sure we parsed it all *)
