@@ -1,6 +1,6 @@
 (library
  ((name pf)
   (public_name pf)
-  (libraries (angstrom cstruct fmt ipaddr logs rresult mirage-logs ))
+  (libraries (angstrom cstruct fmt ipaddr logs rresult mirage-logs uri.services_full))
   (flags (:standard -safe-string))
 ))

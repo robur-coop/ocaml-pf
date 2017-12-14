@@ -1,3 +1,7 @@
 #require "angstrom";;
 open Angstrom;;
+#require "fmt.top";;
+#require "ipaddr.top";;
+#require "uri.services_full";;
+#mod_use "lib/parse.ml";;
 
