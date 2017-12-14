@@ -22,7 +22,7 @@ let iana_protocols = (* see /etc/protocols *)
     "sctp",  132 ;
   ]
 
-let iana_icmp_codes =
+let iana_icmp_types =
   [ "echorep", 0; (*Echo reply     *)
     "unreach", 3; (*Destination unreachable     *)
     "squench", 4; (*Packet loss, slow down   *)
@@ -50,7 +50,7 @@ let iana_icmp_codes =
     "photuris", 40; (*Photuris      *)
   ]
 
-let iana_icmp_types =
+let iana_icmp_codes =
   [ "net-unr", 0; (*unreach :  Network unreachable    *)
     "host-unr", 1; (*unreach :  Host unreachable    *)
     "proto-unr", 2; (*unreach :  Protocol unreachable    *)
@@ -756,13 +756,12 @@ let a_pf_rule : pf_rule t =
                encapsulated_opt None '(' ')'(some(a_match_or_list '{' a_logopt))
               ) >>= fun logopts ->
   option false (a_whitespace *> string "quick" *> return true) >>= fun quick ->
-  option None (a_whitespace *> string "on" *> some a_ifspec)
-  >>= fun ifspec ->
+  option None (a_whitespace *> string "on" *> some a_ifspec) >>= fun ifspec ->
   option None (a_whitespace *>
                some (string "fastroute" *> return Fastroute <|> a_route)
               ) >>= fun route ->
   option None (a_whitespace *> some a_af) >>= fun af ->
-  option None (some a_protospec) >>= fun protospec ->
+  option None (a_whitespace *> some a_protospec) >>= fun protospec ->
   let()=Printf.eprintf "past protospec\n%!"in
   a_whitespace *> a_hosts >>= fun hosts ->
   let()=Printf.eprintf "past hosts\n%!"in
