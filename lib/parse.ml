@@ -34,10 +34,11 @@ let a_match_or_list sep predicate =
   let left, right = match sep with
     | '{' -> '{', '}'
     | '(' -> '(', ')'
+    | '<' -> '<', '>'
     | _ -> failwith (Fmt.strf "Invalid match_or_list char: %C" sep)
   in
   (encapsulated left right (sep_by a_optional_comma predicate))
-  <|> (a_whitespace *> predicate >>| fun p -> [p])
+  <|> (a_ign_whitespace *> predicate >>| fun p -> [p])
 
 let a_number =
   take_while1 (function '0'..'9' -> true | _ -> false) >>= fun str ->
@@ -107,8 +108,8 @@ type pf_name_or_macro = String of string
                       | Macro of string
 
 let pp_pf_name_or_macro fmt = function
-  | String str -> Fmt.pf fmt "(String: %S)" str
-  | Macro str  -> Fmt.pf fmt "(Macro: %S)" str
+  | String str -> Fmt.pf fmt "%S" str
+  | Macro str  -> Fmt.pf fmt "$%s" str
 
 let a_name_or_macro ~candidates : pf_name_or_macro t =
   a_ign_whitespace *>
@@ -127,12 +128,18 @@ let a_name_or_macro ~candidates : pf_name_or_macro t =
 
 let a_interface_name = a_name_or_macro ~candidates:None
 
+let pp_negation fmt = function
+  | true -> Fmt.pf fmt "NOT "
+  | false -> Fmt.pf fmt ""
+
 type pf_ifspec = If_list of (bool * pf_name_or_macro) list
 (* negated, name or macro*)
 
-let pp_ifspec fmt = function
-  | If_list lst ->
-    Fmt.pf fmt "%a" Fmt.(list @@ pair bool pp_pf_name_or_macro) lst
+let pp_pf_ifspec fmt = function
+  | If_list lst -> (*TODO this bool is a negation, should print "NOT" *)
+    Fmt.pf fmt "%a" Fmt.(list ~sep:(unit ", ")
+                         @@ pair ~sep:(unit "") pp_negation pp_pf_name_or_macro
+                        ) lst
 
 let a_ifspec : pf_ifspec t =
   a_match_or_list '{'
@@ -184,6 +191,11 @@ type pf_fragmentation = | Reassemble
                         | Crop
                         | Drop_ovl
 
+let pp_pf_fragmentation fmt = function
+  | Reassemble -> Fmt.pf fmt "reassemble"
+  | Crop -> Fmt.pf fmt "crop"
+  | Drop_ovl -> Fmt.pf fmt "drop-ovl"
+
 let a_fragmentation : pf_fragmentation t =
   string "fragment" *> a_whitespace *>
   choice [ string "reassemble" *> return Reassemble ;
@@ -193,6 +205,11 @@ let a_fragmentation : pf_fragmentation t =
 type pf_address = | IP of Ipaddr.t
                   | Dynamic_addr of pf_name_or_macro
                   | Fixed_addr of pf_name_or_macro
+
+let pp_pf_address fmt = function
+  | IP v -> Ipaddr.pp_hum fmt v
+  | Dynamic_addr addr -> Fmt.pf fmt "(%a)" pp_pf_name_or_macro addr
+  | Fixed_addr addr -> Fmt.pf fmt "%a" pp_pf_name_or_macro addr
 
 let a_ip : Ipaddr.t t =
   (a_ipv4_dotted_quad >>| fun ip -> Ipaddr.V4 ip)
@@ -216,6 +233,10 @@ let a_mask_bits = a_number_range 0 128
 type pf_name_or_number = | Name of pf_name_or_macro
                          | Number of int
 
+let pp_pf_name_or_number fmt = function
+  | Name x -> Fmt.pf fmt "%a" pp_pf_name_or_macro x
+  | Number x -> Fmt.pf fmt "%d" x
+
 let a_name_or_number ~candidates : pf_name_or_number t =
   (a_number >>| fun n -> Number n)
   <|>
@@ -227,6 +248,16 @@ type pf_unary_op = | Unary_eq of pf_name_or_number
                    | Unary_lt_eq of pf_name_or_number
                    | Unary_gt of pf_name_or_number
                    | Unary_gt_eq of pf_name_or_number
+
+let pp_pf_unary_op fmt v =
+  Fmt.pf fmt "%a" Fmt.(pair string pp_pf_name_or_number)
+  @@ match v with
+  | Unary_eq     n -> "= " , n
+  | Unary_not_eq n -> "!= ", n
+  | Unary_lt     n -> "< " , n
+  | Unary_lt_eq  n -> "<= ", n
+  | Unary_gt     n -> "> " , n
+  | Unary_gt_eq  n -> ">= ", n
 
 let a_unary_op ~candidates : pf_unary_op t =
   let a_next = a_ign_whitespace *> a_name_or_number ~candidates in
@@ -242,7 +273,12 @@ let a_unary_op ~candidates : pf_unary_op t =
 type pf_binary_op = (* TODO name "pf_range_op" ? *)
   | Range_inclusive of int * int (* 1:4 -> 1,2,3,4 *)
   | Range_exclusive of int * int (* 1><4 -> 2,3 *)
-  | Range_except  of int * int   (* 1<>4 -> 0,5,6 [, ..] *)
+  | Range_except    of int * int (* 1<>4 -> 0,5,6 [, ..] *)
+
+let pp_pf_binary_op fmt = function
+  | Range_inclusive (a,b) -> Fmt.pf fmt "%d:%d" a b
+  | Range_exclusive (a,b) -> Fmt.pf fmt "%d><%d" a b
+  | Range_except (a,b) -> Fmt.pf fmt "%d<>%d" a b
 
 let a_binary_op : pf_binary_op t =
   a_number >>= fun fst ->
@@ -258,6 +294,10 @@ let a_binary_op : pf_binary_op t =
 
 type pf_op = | Binary of pf_binary_op
              | Unary of pf_unary_op
+
+let pp_pf_op fmt = function
+  | Binary op -> Fmt.pf fmt "@[%a@]" pp_pf_binary_op op
+  | Unary op -> Fmt.pf fmt "@[%a@]" pp_pf_unary_op op
 
 let a_op ~candidates : pf_op t =
   (a_binary_op >>| fun op -> Binary op)
@@ -279,11 +319,35 @@ type if_or_cidr = | Dynamic_if of pf_name_or_macro
                   | Fixed_if of pf_name_or_macro
                   | CIDR of Ipaddr.Prefix.t
 
+let pp_if_or_cidr fmt (w: if_or_cidr) =
+  match w with
+  | Dynamic_if v -> Fmt.pf fmt "(Dynamic_if %a)" pp_pf_name_or_macro v
+  | Fixed_if   v -> Fmt.pf fmt "(Fixed_if %a)" pp_pf_name_or_macro v
+  | CIDR       v -> Fmt.pf fmt "(CIDR %a)" Ipaddr.Prefix.pp_hum v
+
 let a_if_or_cidr : if_or_cidr t =
-  a_address >>= function
-  | Dynamic_addr x -> return @@ Dynamic_if x
-  | Fixed_addr x ->   return @@ Fixed_if x
-  | IP ip ->
+  let expand_ipv4 prefix =
+    let provided_octets = List.length (String.split_on_char '.' prefix) in
+    let padding = String.init ((4 - provided_octets)*2)
+        (function | i when i mod 2 = 0 -> '.'
+                  | _ -> '0')
+    in prefix ^ padding
+  in
+  ((a_address)
+   <|> ( take_while1 ( function | '0'..'9' | '.'-> true
+                               | _ -> false
+     ) >>| expand_ipv4 >>| Ipaddr.V4.of_string >>= function
+       | Some x -> return (IP (Ipaddr.V4 x))
+       | None -> fail "invalid short ipv4 CIDR"
+     )
+  ) >>= begin function
+  | (Dynamic_addr x) -> return @@ `pass (Dynamic_if x)
+  | (Fixed_addr x) ->   return @@ `pass (Fixed_if x)
+  | IP ((Ipaddr.V4 _) as ip) -> return (`ip ("/32", ip))
+  | IP ((Ipaddr.V6 _) as ip) -> return (`ip ("/128",ip))
+  end >>= function
+  | `pass ret -> return ret
+  | `ip (default_cidr, ip) ->
     option None (a_ign_whitespace *> char '/' *> some a_mask_bits)
     >>= (function
         | Some mask ->
@@ -294,12 +358,8 @@ let a_if_or_cidr : if_or_cidr t =
             | Some cidr -> return (CIDR cidr)
           end
         | None ->
-          CIDR Ipaddr.(
-            begin match ip with
-              | V4 ip -> (V4.to_string ip) ^ "/32"
-              | V6 ip -> (V6.to_string ip) ^ "/128"
-            end
-            |> Prefix.of_string_exn ) |> return
+          CIDR Ipaddr.( (to_string ip) ^ default_cidr
+                        |> Prefix.of_string_exn ) |> return
       )
 
 let a_redirhost = a_if_or_cidr
@@ -309,6 +369,11 @@ type pf_host =
   | Host_addr of { negated : bool ;
                    if_or_cidr : if_or_cidr ; }
 
+let pp_pf_host fmt = function
+  | Table_name (neg, name) ->
+    Fmt.pf fmt "%a%s" pp_negation neg name
+  | Host_addr {negated; if_or_cidr } ->
+    Fmt.pf fmt "%a%a" pp_negation negated pp_if_or_cidr if_or_cidr
 
 let a_host : pf_host t =
   (* [ "!" ] ( address [ "/" mask-bits ] | "<" string ">" )
@@ -323,42 +388,88 @@ let a_host : pf_host t =
 let a_host_list : pf_host list t = sep_by a_optional_comma a_host
 
 type pf_hosts =
-  | All
+  | All_hosts
   | From_to of {from_host : [`any | `no_route | `urpf_failed | `self
-                            | `host of pf_host | `host_list of pf_host list ] ;
-                from_port : pf_port option ;
+                            | `hosts of pf_host list ] ;
+                from_port : pf_port ;
                 from_os : string list ;
-                to_host : [`any | `no_route | `self | `host of pf_host
-                          | `host_list of pf_host list ] ;
-                to_port : pf_port option ;
+                to_host : [`any | `no_route | `self | `hosts of pf_host list ] ;
+                to_port : pf_port ;
                }
 
+let pp_pf_hosts fmt v =
+  let pp_host fmt = function
+    | `any -> Fmt.pf fmt "any"
+    | `no_route -> Fmt.pf fmt "no-route"
+    | `urpf_failed -> Fmt.pf fmt "urpf-failed"
+    | `self -> Fmt.pf fmt "self"
+    | `hosts x -> Fmt.pf fmt "%a" Fmt.(list pp_pf_host) x
+  in
+  match v with
+  | All_hosts -> Fmt.pf fmt "(all hosts)"
+  | From_to { from_host ; from_port ; from_os ;
+              to_host ; to_port } -> (*TODO*)
+    Fmt.pf fmt "@[<v>from hosts: @[<v>%a@]@ from ports: @[<v>%a@]@ \
+                     from os: [@[<v>%a@]]@ to hosts: @[<v>%a@]@ \
+                     to ports: @[<v>%a@]@]"
+      pp_host from_host
+      Fmt.(list pp_pf_op) from_port
+      Fmt.(list ~sep:(unit ",@ ") string) from_os
+      pp_host to_host
+      Fmt.(list pp_pf_op) to_port
+
 let a_os =
-  string "os" *> sep_by1 a_optional_comma a_string
+  string "os" *>
+  sep_by1 a_optional_comma (a_string <|> a_ign_whitespace *> a_unquoted_string)
+
+let a_fail_if_string needle (appendix: char -> bool) =
+  (* fails if the input contains the string [needle] follow by [appendix]*)
+  let len = String.length needle in
+  available >>= fun avail ->
+  if avail <= len then return ()
+  else begin
+  peek_string (1 + len) >>= function
+  | hay when String.sub hay 0 len = needle && appendix hay.[len] ->
+    fail "a_fail_if_string"
+  | _ -> return () end
 
 let a_hosts : pf_hosts t =
-  string "all" *> return All
+  (string "all" *> return All_hosts)
   <|>
-  ( string "from" *> a_whitespace *>
-    choice [ string "any" *> return `any ;
-             string "no-route" *> return `no_route ;
-             string "urpf-failed" *> return `urpf_failed ;
-             string "self" *> return `self ;
-             (a_host >>| fun host -> `host host) ;
-             (encapsulated '{' '}' a_host_list >>| fun lst -> `host_list lst);
-           ] >>= fun from_host ->
-    option None (a_whitespace *> some a_port) >>= fun from_port ->
-    option [] (a_whitespace *> a_os) >>= fun from_os ->
-    a_whitespace *> string "to" *> a_whitespace >>= fun () ->
-    choice
-      [ string "any" *> return `any ;
-        string "no-route" *> return `no_route ;
-        string "self" *> return `self ;
-        (a_host >>| fun host -> `host host) ;
-        (encapsulated '{' '}' a_host_list >>| fun lst -> `host_list lst);
-      ] >>= fun to_host ->
-    option None (a_whitespace *> some a_port) >>| fun to_port ->
-    From_to {from_host ; from_port; from_os ; to_host ; to_port }
+  ( option All_hosts
+      (
+        let a_common_host =
+          choice [
+            string "any" *> return `any ;
+            string "no-route" *> return `no_route ;
+            string "self" *> return `self ;
+            (a_match_or_list '{' a_host >>| fun h -> `hosts h);
+          ]
+        in
+        option (return(), `any, [], [])
+          ( string "from" *>
+            option `any
+              ( a_whitespace *> a_fail_if_string "port" is_whitespace *>
+                choice [
+                  a_common_host ;
+                  string "urpf-failed" *> return `urpf_failed ;
+                ]
+              ) >>= fun host ->
+            option [] (a_whitespace *> a_port) >>= fun port ->
+            option [] (a_whitespace *> a_os) >>| fun os ->
+            (a_whitespace, host, port, os)
+          ) >>= fun (ws, from_host, from_port, from_os) ->
+        option (`any, [])
+          ( ws *> string "to" *>
+            option `any
+              ( a_whitespace *> a_fail_if_string "port" is_whitespace *>
+                a_common_host >>| fun host -> host
+              ) >>= fun host ->
+            option [] (a_whitespace *> a_port) >>| fun port ->
+            host, port
+          ) >>| fun (to_host, to_port) ->
+        From_to {from_host ; from_port; from_os ; to_host ; to_port }
+      )
   )
 
 type pf_return =
@@ -368,7 +479,16 @@ type pf_return =
   | Return_icmp of int option * int option (* v4 code , v6 code *)
   | Return_icmp6 of int option
 
-let a_return : pf_return t =
+let pp_pf_return fmt = function
+  | Drop -> Fmt.pf fmt "drop"
+  | Return -> Fmt.pf fmt "return"
+  | Return_rst ttl -> Fmt.pf fmt "return-rst(%a)" Fmt.(option int) ttl
+  | Return_icmp (v4, v6) -> Fmt.pf fmt "return-icmp(IPv4:%a, IPv6:%a)"
+                              Fmt.(option int) v4
+                              Fmt.(option int) v6
+  | Return_icmp6 code -> Fmt.pf fmt "return-icmp6(%a)" Fmt.(option int) code
+
+let a_return : pf_return t = (* "block" options *)
   (* "drop" | "return"
    | "return-rst" [ "( ttl" number ")" ] |
      "return-icmp" [ "(" icmpcode [ [ "," ] icmp6code ] ")" ] |
@@ -393,6 +513,14 @@ let a_return : pf_return t =
 
 type pf_action = | Pass | Block of pf_return option
                  | Scrub of bool (* false: "no scrub" / true: "scrub" *)
+
+let pp_pf_action fmt = function
+  | Pass -> Fmt.pf fmt "(Pass)"
+  | Block retopt -> Fmt.pf fmt "(Block, policy: %a)"
+                      Fmt.(option ~none:(unit "Default") pp_pf_return)
+                      retopt
+  | Scrub false -> Fmt.pf fmt "(No-Scrub)"
+  | Scrub true -> Fmt.pf fmt "(Scrub)"
 
 let a_action : pf_action t =
   (* "pass" | "block" [ return ] | [ "no" ] "scrub" *)
@@ -420,6 +548,10 @@ let a_proto_name_or_number : pf_name_or_number t =
 
 type pf_protospec = Proto_list of pf_name_or_number list
 
+let pp_pf_protospec fmt = function
+    Proto_list lst -> Fmt.pf fmt "[%a]" Fmt.(list ~sep:(unit ",@ ")
+                                             pp_pf_name_or_number) lst
+
 let a_protospec : pf_protospec t =
   (* "proto" ( proto-name | proto-number |
                "{" proto-list "}" ) *)
@@ -429,6 +561,13 @@ let a_protospec : pf_protospec t =
 type pf_logopt = | All
                  | User
                  | To of pf_name_or_macro
+
+let pp_pf_logopt fmt = function
+  | All -> Fmt.pf fmt "all"
+  | User -> Fmt.pf fmt "user"
+  | To pfnm -> Fmt.pf fmt "To: %a" pp_pf_name_or_macro pfnm
+
+let pp_pf_logopts = Fmt.list pp_pf_logopt
 
 let a_logopt : pf_logopt t =
   choice [ string "all" *> return All ;
@@ -440,6 +579,10 @@ type pf_routehost = pf_name_or_macro * (pf_address * int option) option
    block from $ext ! 1.2.3.4/32
    seems pretty useful to me
 *)
+
+let pp_pf_routehost fmt (ifn, addrs) =
+  Fmt.pf fmt "if: %a %a" pp_pf_name_or_macro ifn
+    Fmt.(option @@ pair pp_pf_address (option int)) addrs
 
 let a_routehost : pf_routehost t =
   encapsulated '(' ')'
@@ -456,16 +599,25 @@ let a_routehost : pf_routehost t =
 let a_routehost_list : pf_routehost list t =
   sep_by (a_optional_comma <|> a_whitespace) a_routehost
 
-type pf_pooltype = Pooltype_TODO
+type pf_pooltype =
+  | Bitmask
+  | Random
+  | Source_hash
+  | Round_robin
+
+let pp_pf_pooltype fmt = function
+  | Bitmask -> Fmt.pf fmt "Bitmask"
+  | Random -> Fmt.pf fmt "Random"
+  | Source_hash -> Fmt.pf fmt "Source hash"
+  | Round_robin -> Fmt.pf fmt "Round robin"
 
 let a_pooltype : pf_pooltype t =
-  choice
-    [ string "bitmask" ;
-      string "random" ;
-      string "source-hash" ;
-      string "round-robin" ;
-    ] (*TODO*) *>
-  return Pooltype_TODO
+  choice (*TODO*)
+    [ string "bitmask" *> return Bitmask ;
+      string "random" *> return Random ;
+      string "source-hash" *> return Source_hash ;
+      string "round-robin" *> return Round_robin ;
+    ]
 
 type pf_route =
   | Fastroute
@@ -474,6 +626,16 @@ type pf_route =
         routehosts : pf_routehost list ;
         pooltype : pf_pooltype option ;
       }
+
+let pp_pf_route fmt = function
+  | Fastroute ->  Fmt.pf fmt "Fastroute"
+  | Route {verb ; routehosts; pooltype} ->
+    Fmt.pf fmt "Route @[<v>{ %s@ routehost: %a@ pooltype: %a}@]"
+      (match verb with |  `route_to -> "route-to"
+                       | `reply_to -> "reply-to"
+                       | `dup_to -> "dup-to")
+      Fmt.(list pp_pf_routehost) routehosts
+      Fmt.(option pp_pf_pooltype) pooltype
 
 let a_route : pf_route t =
   choice [string "route-to" *> return `route_to ;
@@ -487,6 +649,10 @@ type pf_icmp_type_code = { icmp_type : pf_name_or_number ;
                            icmp_code : pf_name_or_number option ;
                          }
 
+let pp_pf_icmp_type_code fmt {icmp_type; icmp_code} =
+  Fmt.pf fmt "icmp type: %a code: %a" pp_pf_name_or_number icmp_type
+    Fmt.(option ~none:(unit "Default") pp_pf_name_or_number) icmp_code
+
 let a_icmp_type_code : pf_icmp_type_code t =
   (* ( icmp-type-name | icmp-type-number )
      [ "code" ( icmp-code-name | icmp-code-number ) ] *)
@@ -499,20 +665,24 @@ let a_icmp_type_code : pf_icmp_type_code t =
               ) >>| fun icmp_code ->
   { icmp_type ; icmp_code }
 
-let a_icmp_list : pf_icmp_type_code list t =
-  a_match_or_list '{' a_icmp_type_code
-
 type pf_icmp_type = Icmp_type of pf_icmp_type_code list
 
+let pp_pf_icmp_type fmt = function
+  | Icmp_type lst -> Fmt.pf fmt "ICMP %a" Fmt.(list pp_pf_icmp_type_code) lst
 let a_icmp_type : pf_icmp_type t =
   (* "icmp-type" ( icmp-type-code | "{" icmp-list "}" ) *)
-  string "icmp-type" *> a_icmp_list >>| fun lst -> Icmp_type lst
+  string "icmp-type" *>
+  a_match_or_list '{' a_icmp_type_code >>| fun lst -> Icmp_type lst
 
 type pf_icmp6_type = Icmp6_type of pf_icmp_type_code list
 
-let a_icmp6_type =
+let pp_pf_icmp6_type fmt = function
+  | Icmp6_type lst -> Fmt.pf fmt "ICMPv6 %a" Fmt.(list pp_pf_icmp_type_code) lst
+
+let a_icmp6_type : pf_icmp6_type t =
   (* "icmp6-type" ( icmp-type-code | "{" icmp-list "}" ) *)
-  string "icmp6-type" *> a_icmp_list >>| fun lst -> Icmp6_type lst
+  string "icmp6-type" *>
+  a_match_or_list '{' a_icmp_type_code >>| fun lst -> Icmp6_type lst
 
 type pf_tos = | Lowdelay
               | Throughput
@@ -526,11 +696,10 @@ let a_tos : pf_tos t =
            ( string "0x" *>
              take_while1 (function | 'a'..'f'|'A'..'F'|'0'..'9' -> true
                                    | _ -> false
-               ) >>= fun hex ->
-             begin match int_of_string ("0x"^hex) with
-               | i -> return (Tos_number i)
-               | exception _ -> fail "TOS: hex-decoding failed"
-             end );
+               ) >>= fun hex -> match int_of_string ("0x" ^ hex) with
+                                | i -> return (Tos_number i)
+                                | exception _ -> fail "TOS: hex-decoding failed"
+           ) ;
            a_number >>| fun i -> Tos_number i ;
          ]
 
@@ -634,6 +803,33 @@ type pf_filteropt =
   | Rtable of int
   | Probability of int (* match n% of the time *)
 
+let pp_pf_filteropt fmt v =
+  let sep = Fmt.unit ",@ " in
+  match v with
+  | Filteropt_users  ops ->
+    Fmt.pf fmt "users: @[%a@]" Fmt.(list ~sep pp_pf_op) ops
+  | Filteropt_groups ops ->
+    Fmt.pf fmt "groups: @[%a@]" Fmt.(list ~sep pp_pf_op) ops
+  | Flags _ -> Fmt.pf fmt "TODO-pp_pf_flags"
+  | Filteropt_icmp_type icmp -> Fmt.pf fmt "%a" pp_pf_icmp_type icmp
+  | Filteropt_icmp6_type icmp6 -> Fmt.pf fmt "%a" pp_pf_icmp6_type icmp6
+  | Tos _ -> Fmt.pf fmt "tos"
+  | State _ -> Fmt.pf fmt "TODO-pp_pf_state"
+  | Fragment -> Fmt.pf fmt "fragment"
+  | Allow_opts -> Fmt.pf fmt "allow-opts"
+  | Fragmentation frag -> Fmt.pf fmt "%a" pp_pf_fragmentation frag
+  | No_df -> Fmt.pf fmt "no-df"
+  | Min_ttl n -> Fmt.pf fmt "min-ttl: %d" n
+  | Max_mss n -> Fmt.pf fmt "max-mss: %d" n
+  | Random_id -> Fmt.pf fmt "random-id"
+  | Reassemble_tcp -> Fmt.pf fmt "reassemble-tcp"
+  | Label str -> Fmt.pf fmt "(Label: %s)" str
+  | Tag str -> Fmt.pf fmt "tag-%a" Fmt.(quote string) str
+  | Tagged (neg, s) -> Fmt.pf fmt "%a%s" pp_negation neg s
+  | Queue qlst -> Fmt.pf fmt "%a" Fmt.(list string) qlst
+  | Rtable n -> Fmt.pf fmt "rtable: %d" n
+  | Probability n -> Fmt.pf fmt "probability: %d%%" n
+
 let a_filteropt : pf_filteropt t =
   choice
     [ ( a_user >>| fun users -> Filteropt_users users ) ;
@@ -677,7 +873,17 @@ type direction = Incoming | Outgoing | Both_directions
     This rule applies to incoming or outgoing packets.  If neither in nor
     out are specified, the rule will match packets in both directions.*)
 
+let pp_direction fmt = function
+  | Incoming -> Fmt.pf fmt "Incoming"
+  | Outgoing -> Fmt.pf fmt "Outgoing"
+  | Both_directions -> Fmt.pf fmt "Bidirectional"
+
 type pf_af = Inet | Inet6
+
+let pp_pf_af fmt = function
+  | Inet -> Fmt.pf fmt "IPv4"
+  | Inet6 -> Fmt.pf fmt "IPv6"
+
 let a_af : pf_af t =
   (string "inet" *> return Inet) <|> (string "inet6" *> return Inet6)
 
@@ -693,6 +899,33 @@ type pf_rule =
     hosts : pf_hosts ;
     filteropts : pf_filteropt list ;
   }
+
+let pp_pf_rule fmt { action; direction; logopts; quick; ifspec;
+                     route; af; protospec; hosts; filteropts } =
+  let default = Fmt.unit "Default" in
+  Fmt.pf fmt "@[<v>\
+    { @[<v>\
+      Action: %a@ \
+      Traffic direction: %a@ \
+      Log options: %a@ \
+      Quick: %b@ \
+      Interface: %a@ \
+      Route: %a@ \
+      Address family: %a@ \
+      Protocol spec: %a@ \
+      Hosts: %a@ \
+      Filter options: @[<v>%a@]@,
+    @] }@]"
+    pp_pf_action action
+    pp_direction direction
+    Fmt.(option ~none:default pp_pf_logopts) logopts
+    quick
+    Fmt.(option ~none:default pp_pf_ifspec) ifspec
+    Fmt.(option ~none:default pp_pf_route) route
+    Fmt.(option ~none:default pp_pf_af) af
+    Fmt.(option ~none:default pp_pf_protospec) protospec
+    pp_pf_hosts hosts
+    Fmt.(list pp_pf_filteropt) filteropts
 
 let a_pf_rule : pf_rule t =
   a_action >>= fun action ->
@@ -710,7 +943,7 @@ let a_pf_rule : pf_rule t =
               ) >>= fun route ->
   option None (a_whitespace *> some a_af) >>= fun af ->
   option None (a_whitespace *> some a_protospec) >>= fun protospec ->
-  a_whitespace *> a_hosts >>= fun hosts ->
+  option All_hosts (a_whitespace *> a_hosts) >>= fun hosts ->
   option [] (a_whitespace *> sep_by a_whitespace a_filteropt)
   >>| fun filteropts ->
   { action ; direction; logopts ; quick ; ifspec ; route ; af ; protospec ;
@@ -901,17 +1134,13 @@ let a_macro_definition : pf_macro_definition t =
 
 type pf_tableaddr =
   | Table_hostname of string
-  | Table_ifspec of pf_ifspec
-  | Table_ipv4 of Ipaddr.V4.t
-  | Table_ipv6 of Ipaddr.V6.t
+  | Table_if_or_cidr of if_or_cidr
   | Self
 
 let a_tableaddr =
   choice [ string "self" *> return Self;
            (a_unquoted_string >>| fun host -> Table_hostname host) ; (*TODO*)
-           (a_ifspec >>| fun ifspec -> Table_ifspec ifspec) ;
-           (a_ipv4_dotted_quad >>| fun ip -> Table_ipv4 ip) ;
-           (a_ipv6_coloned_hex >>| fun ip -> Table_ipv6 ip) ;
+           (a_if_or_cidr >>| fun ifcidr -> Table_if_or_cidr ifcidr) ;
   ]
 
 type pf_table_opts = | Persist
@@ -934,9 +1163,8 @@ type pf_table_rule = { name : string ;
                        table_opts : pf_table_opts list ; }
 
 let a_table_rule : pf_table_rule t =
-  string "table" *> a_ign_whitespace *> char '<' *>
-  a_unquoted_string <* a_ign_whitespace <* char '>' >>= fun name ->
-  option [] (a_ign_whitespace *> sep_by a_whitespace a_table_opts
+  string "table" *> encapsulated '<' '>' a_unquoted_string >>= fun name ->
+  option [] (a_ign_whitespace *> sep_by a_optional_comma a_table_opts
               ) >>| fun table_opts ->
   {name ; table_opts }
 
@@ -1042,6 +1270,19 @@ type line = Include of string
           | Table_rule of pf_table_rule
           | Queue_rule of pf_queue_rule
           | Empty_line
+
+let pp_line fmt = function
+  | Include  str -> Fmt.pf fmt "include %S" str
+  | Macro_definition { name; definition } ->
+    Fmt.pf fmt "%s = %a" name
+      Fmt.(list ~sep:(unit " ") pp_pf_name_or_macro) definition
+  | Pf_rule rule -> Fmt.pf fmt "%a" pp_pf_rule rule
+  | Empty_line -> Fmt.pf fmt ""
+  | Rdr_rule _ -> Fmt.pf fmt "TODO sorry cannot pretty-print [rdr]"
+  | NAT_rule _ -> Fmt.pf fmt "TODO sorry cannot pretty-print [NAT]"
+  | Set _ -> Fmt.pf fmt "TODO sorry cannot pretty-print [set]"
+  | Table_rule _ -> Fmt.pf fmt "TODO sorry cannot pretty-print [table]"
+  | Queue_rule _ -> Fmt.pf fmt "TODO sorry cannot pretty-print [queue]"
 
 let a_line =
   (* option | pf-rule | nat-rule | binat-rule | rdr-rule |

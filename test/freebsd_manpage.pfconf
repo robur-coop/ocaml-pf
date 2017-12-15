@@ -4,8 +4,9 @@ all_ifs = "{" $ext_if lo0 "}"
 pass out on $ext_if from any to any
 pass in  on $ext_if proto tcp from any to any port 25
 
-# table <private> const { 10/8, 172.16/12, 192.168/16 }
-# table <badhosts> persist
+table <private> const { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 }
+table <private> const { 10/8, 172.16/12, 192.168/16 }
+table <badhosts> persist
 block on fxp0 from { <private>, <badhosts> } to any
 
 table <spam> persist file "/etc/spammers" file "/etc/openrelays"
@@ -47,9 +48,6 @@ set skip on lo0
 
 scrub in on $ext_if all fragment reassemble
 
-# queue is not implemented \
-  but it may be in the future:
-
 queue std bandwidth 10% cbq(default)
 queue http bandwidth 60% priority 2 cbq(borrow red) \
 	   { employees, developers }
@@ -69,8 +67,7 @@ pass out on dc0 inet proto tcp from any to any port 22 \
 pass out on dc0 inet proto tcp from any to any port 25 \
 	   queue mail
 
-# TODO this example seems broken:
-# rdr on ne3 inet proto tcp to port smtp -> 127.0.0.1 port spamd
+rdr on ne3 inet proto tcp to port smtp -> 127.0.0.1 port spamd
 
 block all
 
@@ -100,10 +97,8 @@ pass in inet proto tcp from any to 1.2.3.4 \
 pass in inet proto tcp from any to 1.2.3.5 \
        port > 1023 label "1.2.3.5:>1023"
 
-# TODO pass in proto tcp to port 25 queue mail
-pass in proto tcp from any to any port 25 queue mail
-# TODO pass in proto tcp to port 22 queue(ssh_bulk, ssh_prio)
-pass in proto tcp from any to any port 22 queue(ssh_bulk, ssh_prio)
+pass in proto tcp to port 25 queue mail
+pass in proto tcp to port 22 queue(ssh_bulk, ssh_prio)
 
 # TODO block in proto icmp probability 20%
 block in proto icmp all probability 20%
@@ -118,8 +113,7 @@ pass in proto tcp from any to any \
 		 (max 100, source-track rule, max-src-nodes 75, \
 		 max-src-states 3, tcp.established 60, tcp.closing 5)
 
-# TODO block quick from <bad_hosts>
-block quick from <bad_hosts> to any
+block quick from <bad_hosts>
 
 # TODO is "source-track" required below? \
 pass in on $ext_if proto tcp to $webserver port www keep state \

@@ -1,5 +1,7 @@
 #require "angstrom";;
 open Angstrom;;
+#require "rresult";;
+open Rresult;;
 #require "fmt.top";;
 #require "ipaddr.top";;
 #require "uri.services_full";;
