@@ -1,0 +1,130 @@
+
+ext_if = "kue0"
+all_ifs = "{" $ext_if lo0 "}"
+pass out on $ext_if from any to any
+pass in  on $ext_if proto tcp from any to any port 25
+
+# table <private> const { 10/8, 172.16/12, 192.168/16 }
+# table <badhosts> persist
+block on fxp0 from { <private>, <badhosts> } to any
+
+table <spam> persist file "/etc/spammers" file "/etc/openrelays"
+block on fxp0 from <spam> to any
+
+set timeout tcp.first 120
+set timeout tcp.established 86400
+set timeout { adaptive.start 6000, adaptive.end 12000 }
+set limit states 10000
+
+set loginterface dc0
+
+set loginterface none
+
+set limit states 20000
+
+set limit frags 20000
+
+set limit src-nodes 2000
+
+set limit tables 1000
+set limit table-entries 100000
+
+set limit { states 20000, frags 20000, src-nodes 2000 }
+
+set optimization aggressive
+
+set block-policy return
+
+set state-policy if-bound
+
+set state-defaults pflow, no-sync
+
+set hostid 1
+
+set fingerprints "/etc/pf.os.devel"
+
+set skip on lo0
+
+scrub in on $ext_if all fragment reassemble
+
+# queue is not implemented \
+  but it may be in the future:
+
+queue std bandwidth 10% cbq(default)
+queue http bandwidth 60% priority 2 cbq(borrow red) \
+	   { employees, developers }
+queue  developers bandwidth 75% cbq(borrow)
+queue  employees bandwidth 15%
+queue mail bandwidth 10% priority 0 cbq(borrow ecn)
+queue ssh bandwidth 20% cbq(borrow) { ssh_interactive, ssh_bulk }
+queue  ssh_interactive bandwidth 50% priority 7 cbq(borrow)
+queue  ssh_bulk bandwidth 50% priority 0 cbq(borrow)
+block return out on dc0 inet all queue std
+pass out on dc0 inet proto tcp from $developerhosts to any port 80 \
+	   queue developers
+pass out on dc0 inet proto tcp from $employeehosts to any port 80 \
+	   queue employees
+pass out on dc0 inet proto tcp from any to any port 22 \
+	   queue(ssh_bulk, ssh_interactive)
+pass out on dc0 inet proto tcp from any to any port 25 \
+	   queue mail
+
+# TODO this example seems broken:
+# rdr on ne3 inet proto tcp to port smtp -> 127.0.0.1 port spamd
+
+block all
+
+pass out inet proto icmp all icmp-type echoreq
+
+pass in all
+pass in from any to any
+pass in proto tcp from any port <= 1024 to any
+pass in proto tcp from any to any port 25
+pass in proto tcp from 10.0.0.0/8 port > 1024 \
+                  to ! 10.1.2.3 port != ssh
+# TODO: pass in proto tcp from any os "OpenBSD"
+pass in proto tcp from any os "openbsd" to any
+
+block out proto { tcp, udp } all
+pass  out proto { tcp, udp } all user { < 1000, dhartmei }
+
+pass all tos lowdelay
+pass all tos 0x10
+pass all tos 16
+
+ips = "{ 1.2.3.4, 1.2.3.5 }"
+pass in proto tcp from any to $ips \
+port > 1023 label "$dstaddr:$dstport"
+pass in inet proto tcp from any to 1.2.3.4 \
+       port > 1023 label "1.2.3.4:>1023"
+pass in inet proto tcp from any to 1.2.3.5 \
+       port > 1023 label "1.2.3.5:>1023"
+
+# TODO pass in proto tcp to port 25 queue mail
+pass in proto tcp from any to any port 25 queue mail
+# TODO pass in proto tcp to port 22 queue(ssh_bulk, ssh_prio)
+pass in proto tcp from any to any port 22 queue(ssh_bulk, ssh_prio)
+
+# TODO block in proto icmp probability 20%
+block in proto icmp all probability 20%
+
+pass out proto tcp from any to any modulate state
+pass in  proto tcp from any to any port 25 flags S/SFRA modulate state
+
+pass in proto tcp from any to any port www synproxy state
+
+pass in proto tcp from any to any \
+		 port www keep state \
+		 (max 100, source-track rule, max-src-nodes 75, \
+		 max-src-states 3, tcp.established 60, tcp.closing 5)
+
+# TODO block quick from <bad_hosts>
+block quick from <bad_hosts> to any
+
+# TODO is "source-track" required below? \
+pass in on $ext_if proto tcp to $webserver port www keep state \
+     (max-src-conn-rate 100/10, overload <bad_hosts> flush global)
+pass in on $ext_if proto tcp from any to $webserver port www keep state \
+     (max-src-conn-rate 100/10, overload <bad_hosts> flush source-track global)
+
+

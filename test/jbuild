@@ -1,0 +1,11 @@
+(executables
+  ((names (parse_conf))
+   (libraries ( pf )
+   )
+))
+
+(alias
+ ((name runtest)
+  (deps (parse_conf.exe))
+  (action (run ${<} ../../../test/freebsd_manpage.pfconf))))
+

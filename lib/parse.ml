@@ -1,87 +1,6 @@
 open Angstrom
 
-let iana_protocols = (* see /etc/protocols *)
-  [ "ip",      0 ;
-    "icmp",    1 ;
-    "igmp",    2 ;
-    "ipencap", 4 ;
-    "tcp",     6 ;
-    "udp",    17 ;
-    "dccp",   33 ;
-    "ipv6",   41 ;
-    "ipv6-route", 43 ;
-    "ipv6-frag",  44 ;
-    "gre",    47 ;
-    "esp",    50 ;
-    "ah",     51 ;
-    "ipv6-icmp",  58 ;
-    "ipv6-nonxt", 59 ;
-    "ipv6-opts",  60 ;
-    "ipip",   94 ;
-    "l2tp",  115 ;
-    "sctp",  132 ;
-  ]
-
-let iana_icmp_types =
-  [ "echorep", 0; (*Echo reply     *)
-    "unreach", 3; (*Destination unreachable     *)
-    "squench", 4; (*Packet loss, slow down   *)
-    "redir", 5; (*Shorter route exists    *)
-    "althost", 6; (*Alternate host address    *)
-    "echoreq", 8; (*Echo request     *)
-    "routeradv", 9; (*Router advertisement     *)
-    "routersol", 10; (*Router solicitation     *)
-    "timex", 11; (*Time exceeded     *)
-    "paramprob", 12; (*Invalid IP header    *)
-    "timereq", 13; (*Timestamp request     *)
-    "timerep", 14; (*Timestamp reply     *)
-    "inforeq", 15; (*Information request     *)
-    "inforep", 16; (*Information reply     *)
-    "maskreq", 17; (*Address mask request    *)
-    "maskrep", 18; (*Address mask reply    *)
-    "trace", 30; (*Traceroute      *)
-    "dataconv", 31; (*Data conversion problem    *)
-    "mobredir", 32; (*Mobile host redirection    *)
-    "ipv6-where", 33; (*IPv6 where-are-you     *)
-    "ipv6-here", 34; (*IPv6 i-am-here     *)
-    "mobregreq", 35; (*Mobile registration request    *)
-    "mobregrep", 36; (*Mobile registration reply    *)
-    "skip", 39; (*SKIP      *)
-    "photuris", 40; (*Photuris      *)
-  ]
-
-let iana_icmp_codes =
-  [ "net-unr", 0; (*unreach :  Network unreachable    *)
-    "host-unr", 1; (*unreach :  Host unreachable    *)
-    "proto-unr", 2; (*unreach :  Protocol unreachable    *)
-    "port-unr", 3; (*unreach :  Port unreachable    *)
-    "needfrag", 4; (*unreach :  Fragmentation needed but DF bit set *)
-    "srcfail", 5; (*unreach :  Source routing failed   *)
-    "net-unk", 6; (*unreach :  Network unknown    *)
-    "host-unk", 7; (*unreach :  Host unknown    *)
-    "isolate", 8; (*unreach :  Host isolated    *)
-    "net-prohib", 9; (*unreach :  Network administratively prohibited *)
-    "host-prohib", 10; (*unreach :  Host administratively prohibited *)
-    "net-tos", 11; (*unreach :  Invalid TOS for network  *)
-    "host-tos", 12; (*unreach :  Invalid TOS for host  *)
-    "filter-prohib", 13; (*unreach :  Prohibited access    *)
-    "host-preced", 14; (*unreach :  Precedence violation    *)
-    "cutoff-preced", 15; (*unreach :  Precedence cutoff    *)
-    "redir-net", 0; (*redir :  Shorter route for network  *)
-    "redir-host", 1; (*redir :  Shorter route for host  *)
-    "redir-tos-net", 2; (*redir :  Shorter route for TOS and network*)
-    "redir-tos-host", 3; (*redir :  Shorter route for TOS and host*)
-    "normal-adv", 0; (*routeradv :  Normal advertisement    *)
-    "common-adv", 16; (*routeradv :  Selective advertisement    *)
-    "transit", 0; (*timex :  Time exceeded in transit  *)
-    "reassemb", 1; (*timex :  Time exceeded in reassembly  *)
-    "badhead", 0; (*paramprob :  Invalid option pointer   *)
-    "optmiss", 1; (*paramprob :  Missing option    *)
-    "badlen", 2; (*paramprob :  Invalid length    *)
-    "unknown-ind", 1; (*photuris :  Unknown security index   *)
-    "auth-fail", 2; (*photuris :  Authentication failed    *)
-    "decrypt-fail", 3; (*photuris :  Decryption failed    *)
-  ]
+let a_comment : unit t = (char '#' *> available >>= advance) (* eat the rest *)
 
 let a_negated : bool t = option false (char '!' *> return true)
 
@@ -90,6 +9,7 @@ let is_quote = function '"' -> true | _ -> false
 let not_whitespace c = not (is_whitespace c)
 
 let a_whitespace_unit : unit t =
+  a_comment <|> (* TODO have to hook for comments somewhere *)
   skip (function | ' '| '\t' -> true
                  | _ -> false)
 
@@ -106,22 +26,36 @@ let encapsulated_opt default start fini body =
   a_ign_whitespace *> option default (encapsulated start fini body)
 
 let a_optional_comma =
-  skip_many1 (char ',' *> return () <|> a_whitespace)
+  skip_many1 ( (a_ign_whitespace *> char ',' *> a_ign_whitespace)
+              <|> a_whitespace)
 
 let a_match_or_list sep predicate =
+  (* will ignore whitespace for {}, will mandate before predicate *)
   let left, right = match sep with
     | '{' -> '{', '}'
     | '(' -> '(', ')'
     | _ -> failwith (Fmt.strf "Invalid match_or_list char: %C" sep)
   in
   (encapsulated left right (sep_by a_optional_comma predicate))
-  <|> (predicate >>| fun p -> [p])
+  <|> (a_whitespace *> predicate >>| fun p -> [p])
 
 let a_number =
   take_while1 (function '0'..'9' -> true | _ -> false) >>= fun str ->
   match int_of_string str with
   | i -> return i
   | exception _ -> fail (Fmt.strf "Invalid number: %S" str)
+
+let a_number_range min' max' =
+  a_number >>= function | n when n <= max' && min' <= n -> return n
+                        | n -> fail (Fmt.strf "Number out of range: %d" n)
+
+let a_unquoted_string =
+  (peek_char_fail >>= function
+    | 'a'..'z' -> return ()
+    | _ -> fail "unquoted strings must start with [a-z]"
+  ) *>
+  take_while (function | 'a'..'z' | '_' | '0'..'9' | 'A'..'Z' -> true
+                       | _ -> false )
 
 let a_string =
   choice [
@@ -151,49 +85,59 @@ let a_ipv6_coloned_hex =
   | None -> fail (Fmt.strf "Invalid IPv6: %S" ip)
   | Some ip -> return ip
 
-let a_bandwidth_spec =
-  a_number >>= fun n ->
-  a_ign_whitespace *>
-  choice [ string "b"  *> return (`b n) ;
-           string "Kb" *> return (`Kb n) ;
-           string "Mb" *> return (`Mb n) ;
-           string "Gb" *> return (`Gb n) ;
-           string "%"  *> return (`Percentage n) ;
-         ]
+type pf_bandwidth_spec =
+  | B of int
+  | Kb of int
+  | Mb of int
+  | Gb of int
+  | Percentage of int
+
+let a_bandwidth_spec : pf_bandwidth_spec t =
+  ( a_number >>= fun n ->
+    a_ign_whitespace *>
+    choice [ string "b" *> return (B n) ;
+             string "Kb" *> return (Kb n) ;
+             string "Mb" *> return (Mb n) ;
+             string "Gb" *> return (Gb n) ;
+           ]
+  ) <|> ( a_number_range 0 100 <* a_ign_whitespace <* string "%"
+          >>| fun n -> (Percentage n))
 
 type pf_name_or_macro = String of string
                       | Macro of string
 
+let pp_pf_name_or_macro fmt = function
+  | String str -> Fmt.pf fmt "(String: %S)" str
+  | Macro str  -> Fmt.pf fmt "(Macro: %S)" str
+
 let a_name_or_macro ~candidates : pf_name_or_macro t =
   a_ign_whitespace *>
   (peek_char_fail >>= function
-    | '$' -> char '$' *>
-      peek_char_fail >>= begin function
-        | 'a'..'z' -> return true
-        | _ -> fail "name macro must start with [a-z]"
-      end
+    | '$' -> char '$' *> return true
     | 'a'..'z' -> return false
     | _ -> fail "name must start with [a-z]"
   ) >>= fun is_macro ->
-  take_while (function | 'a'..'z' | '_' | '0'..'9' | 'A'..'Z' -> true
-                       | _ -> false ) >>= fun str ->
+  a_unquoted_string >>= fun str ->
   match is_macro, candidates with
   | true , _ -> return (Macro str)
   | false , None -> return (String str)
   | false , Some valid when List.mem str valid -> return @@ String str
   | false , Some valid -> fail (Fmt.strf "name %S must be one of %a" str
-                                  Fmt.(list string) valid )
-
+                                  Fmt.(list ~sep:(unit ", ") string) valid )
 
 let a_interface_name = a_name_or_macro ~candidates:None
 
 type pf_ifspec = If_list of (bool * pf_name_or_macro) list
 (* negated, name or macro*)
 
+let pp_ifspec fmt = function
+  | If_list lst ->
+    Fmt.pf fmt "%a" Fmt.(list @@ pair bool pp_pf_name_or_macro) lst
+
 let a_ifspec : pf_ifspec t =
-  a_ign_whitespace *>
   a_match_or_list '{'
     ( a_negated >>= fun neg ->
+      a_ign_whitespace *>
       a_interface_name >>| fun ifn -> (neg, ifn)
     ) >>| fun ifl -> If_list ifl
 
@@ -228,6 +172,7 @@ let a_flags : pf_flags t =
       ) {f = false; s = false; r = false; p = false;
          a = false; u = false; e = false; w = false} lst
   in
+  string "flags" *> a_whitespace >>= fun () ->
   (string "any" *> return Flags_any)
   <|>
   ( sep_by a_ign_whitespace a_flag >>| flag_map >>= fun fst ->
@@ -265,10 +210,6 @@ let a_address =
   ]
 
 let some t = t >>| fun applied -> Some applied
-
-let a_number_range min' max' =
-  a_number >>= function | n when n <= max' && min' <= n -> return n
-                        | n -> fail (Fmt.strf "Number out of range: %d" n)
 
 let a_mask_bits = a_number_range 0 128
 
@@ -325,9 +266,9 @@ let a_op ~candidates : pf_op t =
 type pf_port = pf_op list
 
 let a_port : pf_port t =
-  string "port" *> a_whitespace *>
+  string "port" *>
   a_match_or_list '{'
-    ( a_op ~candidates:(Some Uri_services_full.known_tcp_services))
+    ( a_op ~candidates:(Some Constants.iana_services))
   (* Note that we use the IANA policy (like FreeBSD) of not caring
        whether it is a UDP or TCP service, as opposed to what Debian
         puts in /etc/services, where they for example
@@ -373,25 +314,27 @@ let a_host : pf_host t =
   (* [ "!" ] ( address [ "/" mask-bits ] | "<" string ">" )
      string == table name *)
   a_negated >>= fun negated ->
-  a_ign_whitespace *>
+  a_ign_whitespace >>= fun () ->
   (    a_if_or_cidr >>| fun if_or_cidr ->
        Host_addr {negated; if_or_cidr}
-  ) <|> ( encapsulated '<' '>' a_string >>| fun table ->
+  ) <|> ( encapsulated '<' '>' a_unquoted_string >>| fun table ->
           Table_name (negated, table))
 
-let a_host_list : pf_host list t =
-  sep_by (a_optional_comma <|> a_whitespace) a_host
+let a_host_list : pf_host list t = sep_by a_optional_comma a_host
 
 type pf_hosts =
   | All
   | From_to of {from_host : [`any | `no_route | `urpf_failed | `self
                             | `host of pf_host | `host_list of pf_host list ] ;
                 from_port : pf_port option ;
-                from_os : string option ;
+                from_os : string list ;
                 to_host : [`any | `no_route | `self | `host of pf_host
                           | `host_list of pf_host list ] ;
                 to_port : pf_port option ;
                }
+
+let a_os =
+  string "os" *> sep_by1 a_optional_comma a_string
 
 let a_hosts : pf_hosts t =
   string "all" *> return All
@@ -404,14 +347,9 @@ let a_hosts : pf_hosts t =
              (a_host >>| fun host -> `host host) ;
              (encapsulated '{' '}' a_host_list >>| fun lst -> `host_list lst);
            ] >>= fun from_host ->
-    let()=Printf.eprintf "past from\n%!"in
     option None (a_whitespace *> some a_port) >>= fun from_port ->
-    let()=Printf.eprintf "past opt src port\n%!"in
-    option None (a_whitespace *> some a_string) >>= fun from_os ->
-    let()=Printf.eprintf "past opt src OS: %s\n%!"
-        Fmt.(strf "%a" (option string) from_os) in
+    option [] (a_whitespace *> a_os) >>= fun from_os ->
     a_whitespace *> string "to" *> a_whitespace >>= fun () ->
-    let()=Printf.eprintf "past to keyword\n%!"in
     choice
       [ string "any" *> return `any ;
         string "no-route" *> return `no_route ;
@@ -419,9 +357,7 @@ let a_hosts : pf_hosts t =
         (a_host >>| fun host -> `host host) ;
         (encapsulated '{' '}' a_host_list >>| fun lst -> `host_list lst);
       ] >>= fun to_host ->
-    let()=Printf.eprintf "past to value\n%!"in
     option None (a_whitespace *> some a_port) >>| fun to_port ->
-    let()=Printf.eprintf "past opt dst port\n%!"in
     From_to {from_host ; from_port; from_os ; to_host ; to_port }
   )
 
@@ -455,22 +391,26 @@ let a_return : pf_return t =
       >>| fun code -> Return_icmp6 code;
   ]
 
-type pf_action = Pass | Block of pf_return option | Scrub (*TODO "no" *)
+type pf_action = | Pass | Block of pf_return option
+                 | Scrub of bool (* false: "no scrub" / true: "scrub" *)
 
 let a_action : pf_action t =
   (* "pass" | "block" [ return ] | [ "no" ] "scrub" *)
   choice [ string "pass" *> return Pass ;
            ( string "block" *>
-             option None (some a_return) >>| fun ret -> Block ret);
-           string "scrub" *> return Scrub;
+             option None (a_whitespace *> some a_return) >>| fun ret ->
+             Block ret);
+           ( option true (string "no" *> return true <* a_whitespace
+                         ) >>= fun no ->
+             string "scrub" *> return (Scrub no) ) ;
          ]
 
 let a_proto_name =
-  let names, _ = List.split iana_protocols in
+  let names, _ = List.split Constants.iana_protocols in
   a_name_or_macro ~candidates:(Some names)
 
 let a_proto_number =
-  let _, proto_num = List.split iana_protocols in
+  let _, proto_num = List.split Constants.iana_protocols in
   choice (List.map (fun i -> string @@ string_of_int i) proto_num)
 
 let a_proto_name_or_number : pf_name_or_number t =
@@ -483,7 +423,7 @@ type pf_protospec = Proto_list of pf_name_or_number list
 let a_protospec : pf_protospec t =
   (* "proto" ( proto-name | proto-number |
                "{" proto-list "}" ) *)
-  string "proto" *> a_whitespace *>
+  string "proto" *>
   a_match_or_list '{' a_proto_name_or_number >>| fun lst -> Proto_list lst
 
 type pf_logopt = | All
@@ -550,8 +490,8 @@ type pf_icmp_type_code = { icmp_type : pf_name_or_number ;
 let a_icmp_type_code : pf_icmp_type_code t =
   (* ( icmp-type-name | icmp-type-number )
      [ "code" ( icmp-code-name | icmp-code-number ) ] *)
-  let icmp_type_names = Some (List.map fst iana_icmp_types) in
-  let icmp_code_names = Some (List.map fst iana_icmp_codes) in
+  let icmp_type_names = Some (List.map fst Constants.iana_icmp_types) in
+  let icmp_code_names = Some (List.map fst Constants.iana_icmp_codes) in
   (* TODO I guess we should also validate the numbers... *)
   a_name_or_number ~candidates:icmp_type_names >>= fun icmp_type ->
   option None ( a_whitespace *> string "code" *> a_whitespace *>
@@ -566,15 +506,13 @@ type pf_icmp_type = Icmp_type of pf_icmp_type_code list
 
 let a_icmp_type : pf_icmp_type t =
   (* "icmp-type" ( icmp-type-code | "{" icmp-list "}" ) *)
-  string "icmp-type" *> a_whitespace *>
-  a_icmp_list >>| fun lst -> Icmp_type lst
+  string "icmp-type" *> a_icmp_list >>| fun lst -> Icmp_type lst
 
 type pf_icmp6_type = Icmp6_type of pf_icmp_type_code list
 
 let a_icmp6_type =
   (* "icmp6-type" ( icmp-type-code | "{" icmp-list "}" ) *)
-  string "icmp6-type" *> a_whitespace *>
-  a_icmp_list >>| fun lst -> Icmp6_type lst
+  string "icmp6-type" *> a_icmp_list >>| fun lst -> Icmp6_type lst
 
 type pf_tos = | Lowdelay
               | Throughput
@@ -585,13 +523,20 @@ let a_tos : pf_tos t =
   choice [ string "lowdelay"    *> return Lowdelay ;
            string "throughput"  *> return Throughput ;
            string "reliability" *> return Reliability ;
-           string "0x" *> fail "TODO TOS: hex-decoding not implemented" ;
+           ( string "0x" *>
+             take_while1 (function | 'a'..'f'|'A'..'F'|'0'..'9' -> true
+                                   | _ -> false
+               ) >>= fun hex ->
+             begin match int_of_string ("0x"^hex) with
+               | i -> return (Tos_number i)
+               | exception _ -> fail "TOS: hex-decoding failed"
+             end );
            a_number >>| fun i -> Tos_number i ;
          ]
 
 let a_user =
   (* "user" ( unary-op | binary-op | "{" op-list "}" ) *)
-  string "user" *> a_whitespace *> a_match_or_list '{' (a_op ~candidates:None)
+  string "user" *> a_match_or_list '{' (a_op ~candidates:None)
 
 let a_group =
   (* "group" ( unary-op | binary-op | "{" op-list "}" ) *)
@@ -600,15 +545,17 @@ let a_group =
 type pf_timeout = string * int (* TODO *)
 
 let a_timeout : pf_timeout t =
-  (* ( "tcp.first" | "tcp.opening" | "tcp.established" |
-       "tcp.closing" | "tcp.finwait" | "tcp.closed" |
-       "udp.first" | "udp.single" | "udp.multiple" |
-       "icmp.first" | "icmp.error" |
-       "other.first" | "other.single" | "other.multiple" |
-       "frag" | "interval" | "src.track" |
-      "adaptive.start" | "adaptive.end" ) number *)
-  a_string >>= fun qualifier -> a_whitespace *> a_number >>| fun time ->
-  (qualifier, time)
+  choice (List.map string (* These lifted from `man pf.conf`: *)
+            [ "tcp.first"   ; "tcp.opening" ; "tcp.established" ;
+              "tcp.closing" ; "tcp.finwait" ; "tcp.closed" ;
+              "udp.first" ; "udp.single" ; "udp.multiple" ;
+              "icmp.first" ; "icmp.error" ;
+              "other.first" ; "other.single" ; "other.multiple" ;
+              "frag" ; "interval" ; "src.track" ;
+              "adaptive.start" ; "adaptive.end"
+            ]
+         ) >>= fun qualifier ->
+  a_whitespace *> a_number >>| fun time -> (qualifier, time)
 
 type pf_state_opt =
   | Max of int
@@ -652,7 +599,7 @@ let a_state_opt : pf_state_opt t =
         a_ign_whitespace *> char '/' *> a_ign_whitespace *> a_number
         >>| fun snd -> Max_src_conn_rate (fst, snd)) ;
       string "overload" *> a_ign_whitespace *> char '<' *>
-      ( a_string >>= fun table -> char '>' *>
+      ( a_unquoted_string >>= fun table -> char '>' *>
                                   option false (a_ign_whitespace *>
                                                 string "flush" *> return true
                                                ) >>| fun flush ->
@@ -661,7 +608,7 @@ let a_state_opt : pf_state_opt t =
       string "floating" *> return Floating ;
     ]
 
-let a_state_opts = sep_by (a_optional_comma <|> a_whitespace) a_state_opt
+let a_state_opts = sep_by a_optional_comma a_state_opt
 
 type pf_filteropt =
   | Filteropt_users of pf_op list
@@ -703,22 +650,23 @@ let a_filteropt : pf_filteropt t =
        a_whitespace *> string "state" *>
        encapsulated_opt None '(' ')' (some a_state_opts) >>| fun state_opts ->
        State {predicate ; state_opts} ) ;
-      string "fragment" *> (let()=Printf.eprintf "got a fragment\n%!"in return Fragment) ;
+      (a_fragmentation >>| fun frag -> Fragmentation frag) ;
+      string "fragment" *> return Fragment ;
       string "no-df" *> return No_df ;
       ( string "min-ttl" *> a_whitespace *> a_number >>| fun n -> Min_ttl n ) ;
       string "set-tos" *> a_whitespace *> ( a_tos >>| fun tos -> Tos tos ) ;
       string "max-mss" *> a_whitespace *> ( a_number >>| fun n -> Max_mss n ) ;
       string "random-id" *> return Random_id;
       string "reassemble tcp" *> return Reassemble_tcp;
-      (a_fragmentation >>| fun frag -> Fragmentation frag) ;
       string "allow-opts" *> return Allow_opts ;
       string "label" *> a_whitespace *> (a_string >>| fun lbl -> Label lbl ) ;
       string "tag" *> a_whitespace *> (a_string >>| fun tag -> Tag tag ) ;
       ( a_negated >>= fun negated ->
         string "tagged" *> a_whitespace *> a_string >>| fun tag ->
         Tagged (negated ,tag)) ;
-      string "queue" *> a_whitespace *> ( a_match_or_list '(' a_string
-                                          >>| fun entries -> Queue entries) ;
+      string "queue" *>
+      ( a_match_or_list '(' a_unquoted_string
+        >>| fun entries -> Queue entries) ;
       ( string "rtable" *> a_whitespace *> a_number >>| fun num -> Rtable num) ;
       ( string "probability" *> a_whitespace *> a_number_range 0 100 <* char '%'
         >>| fun num -> Probability num) ;
@@ -749,7 +697,7 @@ type pf_rule =
 let a_pf_rule : pf_rule t =
   a_action >>= fun action ->
   option Both_directions
-    ( a_whitespace *>
+    ( a_whitespace >>= fun () ->
       (string "in" *> return Incoming) <|> (string "out" *> return Outgoing)
     ) >>= fun direction ->
   option None (a_whitespace *> string "log" *>
@@ -762,12 +710,9 @@ let a_pf_rule : pf_rule t =
               ) >>= fun route ->
   option None (a_whitespace *> some a_af) >>= fun af ->
   option None (a_whitespace *> some a_protospec) >>= fun protospec ->
-  let()=Printf.eprintf "past protospec\n%!"in
   a_whitespace *> a_hosts >>= fun hosts ->
-  let()=Printf.eprintf "past hosts\n%!"in
   option [] (a_whitespace *> sep_by a_whitespace a_filteropt)
   >>| fun filteropts ->
-  let()=Printf.eprintf "past filteropt\n%!"in
   { action ; direction; logopts ; quick ; ifspec ; route ; af ; protospec ;
     hosts ; filteropts}
 
@@ -778,6 +723,23 @@ struct
              | Hostid of int (* TODO 32-bits *)
              | State_policy of string
              | Block_policy of string
+             | Skip_on of pf_name_or_macro
+             | Timeout of pf_timeout list
+             | Limit of (string * int) list
+             | Loginterface of pf_name_or_macro option
+             | Optimization of string (*TODO*)
+             | State_defaults of pf_state_opt list
+             | Fingerprints of string (* filename *)
+
+  let a_limit_item =
+    choice [ string "states" ;
+             string "frags" ;
+             string "tables" ; (* TODO this is not documented in `man pf.conf`*)
+             string "table-entries" ; (* TODO same *)
+             string "src-nodes" ; ] >>= fun item ->
+    a_whitespace *> a_number >>| fun num ->
+    (item, num)
+
   let a_set =
     a_ign_whitespace *> string "set" *>
     a_whitespace *>
@@ -796,6 +758,29 @@ struct
         ( string "block-policy" *> a_whitespace *>
           (string "drop" <|> string "return")
           >>| fun pol -> Block_policy pol) ;
+        ( string "skip" *> a_whitespace *> string "on" *>
+          a_interface_name >>| fun ifn -> Skip_on ifn
+        ) ;
+        ( string "timeout" *> a_match_or_list '{' a_timeout
+            >>| fun timeout -> Timeout timeout ) ;
+        ( string "limit" *>
+          a_match_or_list '{' a_limit_item >>| fun lmts -> Limit lmts ) ;
+        ( string "loginterface" *> a_whitespace *>
+          ( string "none" *> return None
+            <|> some a_interface_name) >>| fun ifn -> Loginterface ifn) ;
+        ( string "optimization" *> a_whitespace *>
+          choice [ string "normal" ;
+                   string "high-latency" ;
+                   string "satellite" ;
+                   string "aggressive" ;
+                   string "conservative" ;
+                 ] >>| fun optim -> Optimization optim
+        ) ;
+        ( string "state-defaults" *> a_whitespace *>
+          a_state_opts >>| fun opts -> State_defaults opts
+        ) ;
+        ( string "fingerprints" *> a_whitespace *> a_string >>| fun str ->
+          Fingerprints str) ;
       ]
 end
 
@@ -805,7 +790,7 @@ type pf_portspec =
 let a_portspec : pf_portspec t =
   (*see a_port for note about known_tcp_service: *)
   let a_raw_port_number =
-    a_name_or_number ~candidates:(Some Uri_services_full.known_tcp_services)
+    a_name_or_number ~candidates:(Some Constants.iana_services)
   in
   string "port" *> a_whitespace *>
   a_raw_port_number >>= fun start ->
@@ -828,10 +813,8 @@ type pf_rdr_rule =
   }
 
 let a_rdr_rule : pf_rdr_rule t =
-    let()=Printf.eprintf "parsing rdr\n%!" in
   option false (a_ign_whitespace *> string "no" *> return true <* a_whitespace)
   >>= fun no ->
-    let()=Printf.eprintf "past no\n%!" in
   a_ign_whitespace *> string "rdr" *>
   option None ( a_whitespace *> string "pass" *>
                 option None ( a_whitespace *> string "log" *>
@@ -839,27 +822,19 @@ let a_rdr_rule : pf_rdr_rule t =
                             ) >>| fun log ->
                 Some log
               ) >>= fun pass ->
-  let()=Printf.eprintf "past pass\n%!" in
-  option None ( a_whitespace *> string "on" *> a_whitespace *>
-                some a_ifspec ) >>= fun on ->
-  let()=Printf.eprintf "past on\n%!" in
+  option None ( a_whitespace *> string "on" *> some a_ifspec ) >>= fun on ->
   option None (a_whitespace *> some a_af) >>= fun af ->
   option None (a_whitespace *> some a_protospec) >>= fun proto ->
   a_whitespace *> a_hosts >>= fun hosts ->
-  let()=Printf.eprintf "past HOSTS\n%!" in
   option None (a_whitespace *> string "tag" *> some a_string) >>= fun tag ->
-  let()=Printf.eprintf "past opt tag\n%!" in
   option None ( a_whitespace *> string "tagged" *>
                 some a_string) >>= fun tagged ->
-  option None ( a_whitespace *> string "->" *> a_ign_whitespace *>
+  option None ( a_whitespace *> string "->" *>
                 a_match_or_list '{' a_redirhost >>= fun redirhosts ->
                 option None (a_whitespace *> some a_portspec)>>= fun portspec ->
-                let()=Printf.eprintf "past opt portspec\n%!" in
                 option None (a_whitespace *> some a_pooltype)>>| fun pooltype ->
                 Some (redirhosts, portspec, pooltype)
-              ) >>= fun redirhosts ->
-  take_till (fun _ -> false ) >>| fun yo ->
-  let()=Printf.eprintf "past opt pooltype, returning %S\n%!" yo in
+              ) >>| fun redirhosts ->
   {no ; pass ; on ; af; proto ; hosts ; tag; tagged ; redirhosts }
 
 type nat_redirhosts =
@@ -892,18 +867,16 @@ let a_nat_rule =
                             ) >>| fun log ->
                 Some log
                 ) >>= fun pass ->
-  option None ( a_whitespace *> string "on" *> a_whitespace *>
-                some a_ifspec ) >>= fun on ->
+  option None ( a_whitespace *> string "on" *> some a_ifspec ) >>= fun on ->
   option None (a_whitespace *> some a_af) >>= fun af ->
   option None (a_whitespace *> some a_protospec) >>= fun proto ->
   a_whitespace *> a_hosts >>= fun hosts ->
   option None (a_whitespace *> string "tag" *> some a_string) >>= fun tag ->
   option None ( a_whitespace *> string "tagged" *>
                 some a_string) >>= fun tagged ->
-  option None ( a_whitespace *> string "->" *> a_ign_whitespace *>
+  option None ( a_whitespace *> string "->" *>
                 a_match_or_list '{' a_redirhost >>= fun targets ->
                 option None (a_whitespace *> some a_portspec)>>= fun portspec ->
-                let()=Printf.eprintf "past opt portspec\n%!" in
                 option None (a_whitespace *> some a_pooltype)>>= fun pooltype ->
                 option false (a_whitespace *> string "static-port" *>
                               return true ) >>| fun static_port ->
@@ -911,17 +884,154 @@ let a_nat_rule =
               ) >>| fun redirhosts ->
   {no ; pass; on; af; proto; hosts; tag; tagged; redirhosts}
 
-type pf_macro_definition = {name : string; definition : string ; }
+type pf_macro_definition = { name : string ;
+                             definition : pf_name_or_macro list ; }
 
 let a_macro_definition : pf_macro_definition t =
   (* TODO we don't handle macro expansion inside macro definitions yet *)
   a_ign_whitespace *>
   a_name_or_macro ~candidates:None >>= function
   | String name ->
-    a_ign_whitespace *> char '=' *> a_ign_whitespace *>
-    a_string >>| fun definition ->
-    { name ; definition }
+    a_ign_whitespace *> char '=' *>
+    sep_by (a_whitespace) (    (a_string >>| fun str -> String str)
+                            <|> a_name_or_macro ~candidates:None
+                          ) >>| fun definition ->
+   { name ; definition }
   | Macro _ -> fail "macro definition: name should not be prefixed with $-sign"
+
+type pf_tableaddr =
+  | Table_hostname of string
+  | Table_ifspec of pf_ifspec
+  | Table_ipv4 of Ipaddr.V4.t
+  | Table_ipv6 of Ipaddr.V6.t
+  | Self
+
+let a_tableaddr =
+  choice [ string "self" *> return Self;
+           (a_unquoted_string >>| fun host -> Table_hostname host) ; (*TODO*)
+           (a_ifspec >>| fun ifspec -> Table_ifspec ifspec) ;
+           (a_ipv4_dotted_quad >>| fun ip -> Table_ipv4 ip) ;
+           (a_ipv6_coloned_hex >>| fun ip -> Table_ipv6 ip) ;
+  ]
+
+type pf_table_opts = | Persist
+                     | Const
+                     | Counters
+                     | File of string
+                     | Tableaddr of pf_tableaddr list
+
+let a_table_opts =
+  choice [ string "persist" *> return Persist ;
+           string "const" *> return Const ;
+           string "counters" *> return Counters ;
+           string "file" *> a_whitespace *> (a_string >>| fun str -> File str) ;
+           (a_match_or_list '{' a_tableaddr >>| fun lst -> Tableaddr lst ) ;
+           (* TODO this should be a_tableaddr_spec, including negations
+                   and bitmasks for CIDR notation. *)
+         ]
+
+type pf_table_rule = { name : string ;
+                       table_opts : pf_table_opts list ; }
+
+let a_table_rule : pf_table_rule t =
+  string "table" *> a_ign_whitespace *> char '<' *>
+  a_unquoted_string <* a_ign_whitespace <* char '>' >>= fun name ->
+  option [] (a_ign_whitespace *> sep_by a_whitespace a_table_opts
+              ) >>| fun table_opts ->
+  {name ; table_opts }
+
+type pf_sc =
+  | Sc_bw_spec of pf_bandwidth_spec
+  | Sc_TODO_spec of pf_bandwidth_spec * int * pf_bandwidth_spec
+
+type pf_hfsc_def =
+  | Hfsc_default
+  | Hfsc_red
+  | Hfsc_ecn
+  | Hfsc_rio
+  | Linkshare_sc of pf_sc
+  | Realtime_sc of pf_sc
+  | Upperlimit_sc of pf_sc
+
+type pf_scheduler =
+  | Cbq_def of (string * string option) option
+  | Priq_def of (string * string option) option
+  | Hfsc_def of (pf_hfsc_def * pf_hfsc_def option) option
+
+let a_schedulers : pf_scheduler t =
+  let a_one_or_two a_opt =
+    option None (encapsulated '(' ')'
+                   ( a_opt >>= fun fst ->
+                     option None (a_optional_comma *> some a_opt
+                                 ) >>| fun snd -> Some (fst,snd)
+                   ))
+  in
+  let a_cbq_def =
+    let a_cbq_opt =
+      choice @@ List.map string ["default";"borrow";"red";"ecn";"rio"] in
+    string "cbq" *> a_one_or_two a_cbq_opt >>| fun opts -> Cbq_def opts
+  in
+  let a_priq_def =
+    let a_priq_opt =
+      choice @@ List.map string ["default";"red";"ecn";"rio"] in
+    string "priq" *> a_one_or_two a_priq_opt >>| fun opts -> Priq_def opts
+  in
+  let a_hfsc_def =
+    let a_sc_spec =
+      encapsulated '(' ')' ( a_bandwidth_spec >>= fun fst ->
+                             a_whitespace *> a_number >>= fun snd ->
+                             a_whitespace *> a_bandwidth_spec
+                             <* a_ign_whitespace >>| fun thrd ->
+                             Sc_TODO_spec (fst,snd,thrd)
+                           )
+      <|> (a_whitespace *> a_bandwidth_spec >>| fun sp -> Sc_bw_spec sp)
+    in
+    let a_hfsc_opt =
+      choice [ string "default" *> return Hfsc_default ;
+               string "red"     *> return Hfsc_red ;
+               string "ecn"     *> return Hfsc_ecn ;
+               string "rio"     *> return Hfsc_rio ;
+               (string "linkshare" *> a_sc_spec >>| fun sc -> Linkshare_sc sc) ;
+               (string "realtime" *> a_sc_spec >>| fun sc ->  Realtime_sc sc) ;
+               (string "upperlimit" *> a_sc_spec >>| fun sc ->Upperlimit_sc sc);
+             ]
+    in
+    string "hfsc" *> a_one_or_two a_hfsc_opt >>| fun opts -> Hfsc_def opts
+  in
+  choice [ a_cbq_def ; a_priq_def ; a_hfsc_def ]
+
+type pf_queueopt =
+  | Bandwidth of pf_bandwidth_spec
+  | Qlimit of int
+  | Tbrsize of int
+  | Priority of int
+  | Schedulers of pf_scheduler
+
+let a_queueopt : pf_queueopt t =
+  choice [ ( string "bandwidth" *> a_whitespace *> a_bandwidth_spec
+             >>| fun bw -> Bandwidth bw);
+           (string "qlimit" *> a_whitespace *> a_number >>| fun n -> Qlimit n) ;
+           ( string "tbrsize" *> a_whitespace *> a_number >>| fun n ->
+             Tbrsize n) ;
+           ( string "priority" *> a_whitespace *> a_number >>| fun n ->
+             Priority n) ;
+           (a_schedulers >>| fun sc -> Schedulers sc);
+  ]
+
+type pf_queue_rule = { name : string ;
+                       on : pf_name_or_macro option ;
+                       queueopts : pf_queueopt list ;
+                       subqueues : string list ;
+                     }
+
+let a_queue_rule =
+  string "queue" *> a_whitespace *> a_unquoted_string >>= fun name ->
+  option None (a_whitespace *> string "on" *> a_whitespace *>
+               some a_interface_name ) >>= fun on ->
+  a_whitespace *>
+  sep_by a_whitespace a_queueopt >>= fun queueopts ->
+  option [] (a_match_or_list '{' a_unquoted_string)  >>| fun subqueues ->
+  { name ; on ; queueopts ; subqueues }
 
 type line = Include of string
           | Macro_definition of pf_macro_definition
@@ -929,6 +1039,9 @@ type line = Include of string
           | Rdr_rule of pf_rdr_rule
           | NAT_rule of pf_nat_rule
           | Set of PF_set.set_t
+          | Table_rule of pf_table_rule
+          | Queue_rule of pf_queue_rule
+          | Empty_line
 
 let a_line =
   (* option | pf-rule | nat-rule | binat-rule | rdr-rule |
@@ -942,7 +1055,10 @@ let a_line =
       (a_rdr_rule >>| fun rule -> Rdr_rule rule) ;
       (a_pf_rule >>| fun rule -> Pf_rule rule) ;
       (a_nat_rule >>| fun rule -> NAT_rule rule) ;
+      (a_queue_rule >>| fun rule -> Queue_rule rule) ;
       (PF_set.a_set >>| fun set -> Set set) ;
+      (a_ign_whitespace *> end_of_input *> return Empty_line) ;
+      (a_ign_whitespace *> a_table_rule >>| fun rule -> Table_rule rule) ;
     ]
   <* a_ign_whitespace <* end_of_input (* make sure we parsed it all *)
 
@@ -952,18 +1068,22 @@ let into_lines config_str =
         take_while (function '\n'|'\\' -> false | _ -> true) >>= fun s ->
         choice
           [ (string "\\\n" *> ((^) (s^" ") <$> a_unescaped));
-            (end_of_line <|> end_of_input) *> return s ;
+            ((char '\n' *> return ()) <|> end_of_input) *> return s ;
           ]
       )
   in
+  (* we can't use a_ign_whitespace here because comments should not terminate
+     the entire file: TODO: *)
+  let a_ign_ws = skip_many (skip @@ function ' ' | '\t' -> true | _ -> false) in
   config_str |> parse_string
   @@ fix (fun recurse ->
-      a_ign_whitespace *> a_line_split <* a_ign_whitespace >>= fun line ->
+      a_ign_ws *> a_line_split <* a_ign_ws >>= fun line ->
       commit *>
-      match parse_string a_line line with
-      | Error msg -> fail ("failed to parse a line: " ^ msg ^": " ^ line)
-      | Ok parsed_line ->
-        (     (a_ign_whitespace *> end_of_input *> return [parsed_line])
-              <|> (recurse >>| fun lst -> (List.cons parsed_line lst))
-        )
+        begin match parse_string a_line line with
+          | Error msg -> fail ("failed to parse a line: " ^ msg ^": " ^ line)
+          | Ok parsed_line ->
+            (a_ign_ws *> end_of_input *> return [parsed_line])
+            <|>
+            (List.cons parsed_line <$> recurse)
+        end
     )
