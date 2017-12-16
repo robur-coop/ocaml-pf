@@ -68,6 +68,27 @@ let a_string =
   *)
   ] <?> "during STRING parsing"
 
+let a_fail_if_string (needles: string list) (appendix: char -> bool) =
+  (* fails if the input contains the string [needle] follow by [appendix]*)
+  let fail_if f b = if f b then fail "a_fail_if_string" else return () in
+  List.fold_left
+    ( fun acc needle ->
+        acc >>= fun () ->
+        let len = String.length needle in
+        available >>= function
+          | avail when avail < len  -> return () (*it cannot match*)
+          | avail when avail > len ->
+              peek_string (1+len) >>=
+              fail_if (fun hay ->
+                  String.sub hay 0 len = needle && appendix hay.[len])
+          | _ -> peek_string len >>= fail_if ((=) needle)
+    ) ( return () ) needles
+
+let a_string_not stop_strings =
+  (* handle unquoted strings, optionally blacklist [stop_strings] *)
+  (a_string <|>
+   a_fail_if_string stop_strings (is_whitespace) *> a_unquoted_string)
+
 let a_include =
   (string "include"
    *> a_string
@@ -375,18 +396,6 @@ let pp_pf_host fmt = function
   | Host_addr {negated; if_or_cidr } ->
     Fmt.pf fmt "%a%a" pp_negation negated pp_if_or_cidr if_or_cidr
 
-let a_host : pf_host t =
-  (* [ "!" ] ( address [ "/" mask-bits ] | "<" string ">" )
-     string == table name *)
-  a_negated >>= fun negated ->
-  a_ign_whitespace >>= fun () ->
-  (    a_if_or_cidr >>| fun if_or_cidr ->
-       Host_addr {negated; if_or_cidr}
-  ) <|> ( encapsulated '<' '>' a_unquoted_string >>| fun table ->
-          Table_name (negated, table))
-
-let a_host_list : pf_host list t = sep_by a_optional_comma a_host
-
 type pf_hosts =
   | All_hosts
   | From_to of {from_host : [`any | `no_route | `urpf_failed | `self
@@ -422,16 +431,15 @@ let a_os =
   string "os" *>
   a_match_or_list '{' (a_string <|> a_unquoted_string)
 
-let a_fail_if_string needle (appendix: char -> bool) =
-  (* fails if the input contains the string [needle] follow by [appendix]*)
-  let len = String.length needle in
-  available >>= fun avail ->
-  if avail <= len then return ()
-  else begin
-  peek_string (1 + len) >>= function
-  | hay when String.sub hay 0 len = needle && appendix hay.[len] ->
-    fail "a_fail_if_string"
-  | _ -> return () end
+let a_host : pf_host t =
+  (* [ "!" ] ( address [ "/" mask-bits ] | "<" string ">" )
+     string == table name *)
+  a_negated >>= fun negated ->
+  a_ign_whitespace >>= fun () ->
+  (    a_if_or_cidr >>| fun if_or_cidr ->
+       Host_addr {negated; if_or_cidr}
+  ) <|> ( encapsulated '<' '>' a_unquoted_string >>| fun table ->
+          Table_name (negated, table))
 
 let a_hosts : pf_hosts t =
   (* requires preceding whitespace (which will be eaten) since hosts qualifier
@@ -451,8 +459,7 @@ let a_hosts : pf_hosts t =
         option (`any, [], [])
           ( a_whitespace *> string "from" *>
             option `any
-              ( a_whitespace *> a_fail_if_string "port" is_whitespace *>
-                                a_fail_if_string "os" is_whitespace *>
+              ( a_whitespace *> a_fail_if_string ["port";"os"] is_whitespace *>
                 choice [
                   a_common_host ;
                   string "urpf-failed" *> return `urpf_failed ;
@@ -465,7 +472,7 @@ let a_hosts : pf_hosts t =
         option (`any, [])
           ( a_whitespace *> string "to" *>
             option `any
-              ( a_whitespace *> a_fail_if_string "port" is_whitespace *>
+              ( a_whitespace *> a_fail_if_string ["port"] is_whitespace *>
                 a_common_host >>| fun host -> host
               ) >>= fun host ->
             option [] (a_whitespace *> a_port) >>| fun port ->
@@ -865,10 +872,10 @@ let a_filteropt : pf_filteropt t =
       string "random-id" *> return Random_id;
       string "reassemble tcp" *> return Reassemble_tcp;
       string "allow-opts" *> return Allow_opts ;
-      string "label" *> a_whitespace *> (a_string >>| fun lbl -> Label lbl ) ;
-      string "tag" *> a_whitespace *> (a_string >>| fun tag -> Tag tag ) ;
+      string "label" *>a_whitespace *>(a_string_not [] >>| fun lbl ->Label lbl);
+      string "tag" *> a_whitespace *> (a_string_not [] >>| fun tag -> Tag tag );
       ( a_negated >>= fun negated ->
-        string "tagged" *> a_whitespace *> a_string >>| fun tag ->
+        string "tagged" *> a_whitespace *> a_string_not [] >>| fun tag ->
         Tagged (negated ,tag)) ;
       string "queue" *>
       ( a_match_or_list '(' a_unquoted_string
@@ -1069,9 +1076,10 @@ let a_rdr_rule : pf_rdr_rule t =
   option None (a_whitespace *> some a_af) >>= fun af ->
   option None (a_whitespace *> some a_protospec) >>= fun proto ->
   a_hosts >>= fun hosts ->
-  option None (a_whitespace *> string "tag" *> some a_string) >>= fun tag ->
+  option None (a_whitespace *> string "tag" *>
+               some (a_string_not []) ) >>=fun tag ->
   option None ( a_whitespace *> string "tagged" *>
-                some a_string) >>= fun tagged ->
+                some (a_string_not [])) >>= fun tagged ->
   option None ( a_whitespace *> string "->" *>
                 a_match_or_list '{' a_redirhost >>= fun redirhosts ->
                 option None (a_whitespace *> some a_portspec)>>= fun portspec ->
