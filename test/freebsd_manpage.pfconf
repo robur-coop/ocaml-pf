@@ -79,8 +79,8 @@ pass in proto tcp from any port <= 1024 to any
 pass in proto tcp from any to any port 25
 pass in proto tcp from 10.0.0.0/8 port > 1024 \
                   to ! 10.1.2.3 port != ssh
-# TODO: pass in proto tcp from any os "OpenBSD"
-pass in proto tcp from any os "openbsd" to any
+
+pass in proto tcp from any os "OpenBSD"
 
 block out proto { tcp, udp } all
 pass  out proto { tcp, udp } all user { < 1000, dhartmei }
@@ -100,8 +100,7 @@ pass in inet proto tcp from any to 1.2.3.5 \
 pass in proto tcp to port 25 queue mail
 pass in proto tcp to port 22 queue(ssh_bulk, ssh_prio)
 
-# TODO block in proto icmp probability 20%
-block in proto icmp all probability 20%
+block in proto icmp probability 20%
 
 pass out proto tcp from any to any modulate state
 pass in  proto tcp from any to any port 25 flags S/SFRA modulate state
@@ -115,10 +114,7 @@ pass in proto tcp from any to any \
 
 block quick from <bad_hosts>
 
-# TODO is "source-track" required below? \
 pass in on $ext_if proto tcp to $webserver port www keep state \
      (max-src-conn-rate 100/10, overload <bad_hosts> flush global)
-pass in on $ext_if proto tcp from any to $webserver port www keep state \
-     (max-src-conn-rate 100/10, overload <bad_hosts> flush source-track global)
 
 

@@ -434,7 +434,9 @@ let a_fail_if_string needle (appendix: char -> bool) =
   | _ -> return () end
 
 let a_hosts : pf_hosts t =
-  (string "all" *> return All_hosts)
+  (* requires preceding whitespace (which will be eaten) since hosts qualifier
+     is entirely optional. you should NOT use a_whitespace *> before a_hosts *)
+  (a_whitespace *> string "all" *> return All_hosts)
   <|>
   ( option All_hosts
       (
@@ -446,8 +448,8 @@ let a_hosts : pf_hosts t =
             (a_match_or_list '{' a_host >>| fun h -> `hosts h);
           ]
         in
-        option (return(), `any, [], [])
-          ( string "from" *>
+        option (`any, [], [])
+          ( a_whitespace *> string "from" *>
             option `any
               ( a_whitespace *> a_fail_if_string "port" is_whitespace *>
                 choice [
@@ -457,10 +459,10 @@ let a_hosts : pf_hosts t =
               ) >>= fun host ->
             option [] (a_whitespace *> a_port) >>= fun port ->
             option [] (a_whitespace *> a_os) >>| fun os ->
-            (a_whitespace, host, port, os)
-          ) >>= fun (ws, from_host, from_port, from_os) ->
+            (host, port, os)
+          ) >>= fun (from_host, from_port, from_os) ->
         option (`any, [])
-          ( ws *> string "to" *>
+          ( a_whitespace *> string "to" *>
             option `any
               ( a_whitespace *> a_fail_if_string "port" is_whitespace *>
                 a_common_host >>| fun host -> host
@@ -468,6 +470,8 @@ let a_hosts : pf_hosts t =
             option [] (a_whitespace *> a_port) >>| fun port ->
             host, port
           ) >>| fun (to_host, to_port) ->
+        if    from_host = `any && from_port = [] && from_os = []
+           && to_host   = `any && to_port   = [] then All_hosts else
         From_to {from_host ; from_port; from_os ; to_host ; to_port }
       )
   )
@@ -948,7 +952,7 @@ let a_pf_rule : pf_rule t =
               ) >>= fun route ->
   option None (a_whitespace *> some a_af) >>= fun af ->
   option None (a_whitespace *> some a_protospec) >>= fun protospec ->
-  option All_hosts (a_whitespace *> a_hosts) >>= fun hosts ->
+  option All_hosts a_hosts >>= fun hosts ->
   option [] (a_whitespace *> sep_by a_whitespace a_filteropt)
   >>| fun filteropts ->
   { action ; direction; logopts ; quick ; ifspec ; route ; af ; protospec ;
@@ -1063,7 +1067,7 @@ let a_rdr_rule : pf_rdr_rule t =
   option None ( a_whitespace *> string "on" *> some a_ifspec ) >>= fun on ->
   option None (a_whitespace *> some a_af) >>= fun af ->
   option None (a_whitespace *> some a_protospec) >>= fun proto ->
-  a_whitespace *> a_hosts >>= fun hosts ->
+  a_hosts >>= fun hosts ->
   option None (a_whitespace *> string "tag" *> some a_string) >>= fun tag ->
   option None ( a_whitespace *> string "tagged" *>
                 some a_string) >>= fun tagged ->
@@ -1108,7 +1112,7 @@ let a_nat_rule =
   option None ( a_whitespace *> string "on" *> some a_ifspec ) >>= fun on ->
   option None (a_whitespace *> some a_af) >>= fun af ->
   option None (a_whitespace *> some a_protospec) >>= fun proto ->
-  a_whitespace *> a_hosts >>= fun hosts ->
+  a_hosts >>= fun hosts ->
   option None (a_whitespace *> string "tag" *> some a_string) >>= fun tag ->
   option None ( a_whitespace *> string "tagged" *>
                 some a_string) >>= fun tagged ->
