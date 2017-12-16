@@ -737,7 +737,9 @@ type pf_state_opt =
   | Max_src_states of int
   | Max_src_conn of int
   | Max_src_conn_rate of int * int
-  | Overload of {table: string; flush: bool}
+  | Overload of {table: string ;
+                 flush: [`global | `rule] option ;
+                }
   | If_bound
   | Floating
 
@@ -747,8 +749,8 @@ let a_state_opt : pf_state_opt t =
        "max-src-nodes" number | "max-src-states" number |
        "max-src-conn" number |
        "max-src-conn-rate" number "/" number |
-       "overload" "<" string ">" [ "flush" ] |
-       "if-bound" | "floating" ) *)
+       "overload" "<" string ">" [ "flush" (*["global"] TODO not in BNF *) ]
+       | "if-bound" | "floating" ) *)
   choice
     [ (string "max" *> a_whitespace *> a_number >>| fun n -> Max n);
       string "no-sync" *> return No_sync ;
@@ -767,11 +769,14 @@ let a_state_opt : pf_state_opt t =
       ( string "max-src-conn-rate" *> a_whitespace *> a_number >>= fun fst ->
         a_ign_whitespace *> char '/' *> a_ign_whitespace *> a_number
         >>| fun snd -> Max_src_conn_rate (fst, snd)) ;
-      string "overload" *> a_ign_whitespace *> char '<' *>
-      ( a_unquoted_string >>= fun table -> char '>' *>
-                                  option false (a_ign_whitespace *>
-                                                string "flush" *> return true
-                                               ) >>| fun flush ->
+      string "overload" *>
+      ( encapsulated '<' '>' a_unquoted_string >>= fun table ->
+        option None (a_ign_whitespace *>
+                      string "flush" *>
+                      choice [ (a_whitespace *> string "global" *>
+                                return (Some `global)) ;
+                               return (Some `rule) ;]
+                     ) >>| fun flush ->
         Overload {table ; flush } ) ;
       string "if-bound" *> return If_bound ;
       string "floating" *> return Floating ;
