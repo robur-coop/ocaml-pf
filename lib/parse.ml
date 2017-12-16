@@ -23,7 +23,7 @@ let encapsulated start fini body =
   <* a_ign_whitespace <* char fini
 
 let encapsulated_opt default start fini body =
-  a_ign_whitespace *> option default (encapsulated start fini body)
+  option default (encapsulated start fini body)
 
 let a_optional_comma =
   skip_many1 ( (a_ign_whitespace *> char ',' *> a_ign_whitespace)
@@ -420,7 +420,7 @@ let pp_pf_hosts fmt v =
 
 let a_os =
   string "os" *>
-  sep_by1 a_optional_comma (a_string <|> a_ign_whitespace *> a_unquoted_string)
+  a_match_or_list '{' (a_string <|> a_unquoted_string)
 
 let a_fail_if_string needle (appendix: char -> bool) =
   (* fails if the input contains the string [needle] follow by [appendix]*)
@@ -452,6 +452,7 @@ let a_hosts : pf_hosts t =
           ( a_whitespace *> string "from" *>
             option `any
               ( a_whitespace *> a_fail_if_string "port" is_whitespace *>
+                                a_fail_if_string "os" is_whitespace *>
                 choice [
                   a_common_host ;
                   string "urpf-failed" *> return `urpf_failed ;
