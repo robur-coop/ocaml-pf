@@ -14,13 +14,13 @@ Ticked below are the *lines* that are (at least partially) implemented.
 - [ ] `binat-rule`
 - [x] `rdr-rule`
 - [ ] `antispoof-rule`
-- [ ] `altq-rule`
+- [x] `altq-rule`
 - [x] `queue-rule`
-- [ ] `trans-anchors`
+- [x] `trans-anchors`
 - [ ] `anchor-rule`
 - [ ] `anchor-close`
-- [ ] `load-anchor`
-- [ ] `table-rule`
+- [x] `load-anchor`
+- [x] `table-rule`
 - [x] `include`
 
 ## contributing

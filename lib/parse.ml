@@ -13,6 +13,8 @@ let a_whitespace_unit : unit t =
   skip (function | ' '| '\t' -> true
                  | _ -> false)
 
+let some t = t >>| fun applied -> Some applied
+
 let a_ign_whitespace = skip_many a_whitespace_unit
 
 let a_whitespace = skip_many1 a_whitespace_unit
@@ -43,19 +45,38 @@ let a_match_or_list sep predicate =
 let a_number =
   take_while1 (function '0'..'9' -> true | _ -> false) >>= fun str ->
   match int_of_string str with
-  | i -> return i
-  | exception _ -> fail (Fmt.strf "Invalid number: %S" str)
+    | i -> return i
+    | exception _ -> fail (Fmt.strf "Invalid number: %S" str)
 
 let a_number_range min' max' =
   a_number >>= function | n when n <= max' && min' <= n -> return n
                         | n -> fail (Fmt.strf "Number out of range: %d" n)
 
 let a_unquoted_string =
+  (* Lifted from https://github.com/freebsd/freebsd/blob/35326d3159b53afb3e64a9926a953b32e27852c9/sbin/pfctl/parse.y#L5823-L5827
+     where they have this macro:
+   #define allowed_in_string(x) \
+     (isalnum(x) || (ispunct(x) && x != '(' && x != ')' && \
+     x != '{' && x != '}' && x != '<' && x != '>' && \
+     x != '!' && x != '=' && x != '/' && x != '#' && \
+     x != ','))
+     from the freebsd libc manpages we see that alnum() is [a-zA-Z0-9]
+     and that ispunct() accepts:
+     041 ``!''     042 ``"''     043 ``#''     044 ``$''     045 ``%''
+     046 ``&''     047 ``'''     050 ``(''     051 ``)''     052 ``*''
+     053 ``+''     054 ``,''     055 ``-''     056 ``.''     057 ``/''
+     072 ``:''     073 ``;''     074 ``<''     075 ``=''     076 ``>''
+     077 ``?''     100 ``@''     133 ``[''     134 ``\''     135 ``]''
+     136 ``^''     137 ``_''     140 ```''     173 ``{''     174 ``|''
+     175 ``}''     176 ``~''
+    " $ % & ' * + - . : ; ? @ [ \ ] ^ _ ` | ~
+*)
   (peek_char_fail >>= function
-    | 'a'..'z' -> return ()
-    | _ -> fail "unquoted strings must start with [a-z]"
+    | 'a'..'z' | 'A'..'Z' -> return ()
+    | _ -> fail "unquoted strings must start with [a-zA-Z]"
   ) *>
-  take_while (function | 'a'..'z' | '_' | '0'..'9' | 'A'..'Z' -> true
+  take_while (function | 'a'..'z' | '_' | '0'..'9' | 'A'..'Z'
+                       | '-' (*TODO this is not valid in all contexts*) -> true
                        | _ -> false )
 
 let a_string =
@@ -71,6 +92,7 @@ let a_string =
 let a_fail_if_string (needles: string list) (appendix: char -> bool) =
   (* fails if the input contains the string [needle] follow by [appendix]*)
   let fail_if f b = if f b then fail "a_fail_if_string" else return () in
+  if needles = [] then return () else
   List.fold_left
     ( fun acc needle ->
         acc >>= fun () ->
@@ -147,34 +169,72 @@ let a_name_or_macro ~candidates : pf_name_or_macro t =
   | false , Some valid -> fail (Fmt.strf "name %S must be one of %a" str
                                   Fmt.(list ~sep:(unit ", ") string) valid )
 
-let a_interface_name = a_name_or_macro ~candidates:None
+let a_interface_name =
+  a_name_or_macro ~candidates:None >>= fun ifn ->
+  (* Interface names and interface group names can have modifiers appended:
+     :network    Translates to the network(s) attached to the interface.
+     :broadcast  Translates to the interface's broadcast address(es).
+         :peer  Translates to the point-to-point interface's peer address(es).
+         :0     Do not include interface aliases.*)
+  option None (some @@ choice [ string ":network" *> return `network ;
+                        string ":broadcast" *> return `broadcast ;
+                        string ":peer" *> return `peer ;
+                                string ":0" *> return `no_aliases ; ]
+              ) >>| fun modfer -> ifn, modfer
 
 let pp_negation fmt = function
   | true -> Fmt.pf fmt "NOT "
   | false -> Fmt.pf fmt ""
 
-type pf_ifspec = If_list of (bool * pf_name_or_macro) list
-(* negated, name or macro*)
+type pf_interface = (*TODO move modifier to a_host*)
+  { negated : bool ;
+    if_name : pf_name_or_macro ;
+    modifier : [`network | `broadcast | `peer | `no_aliases ] option
+  }
+let pp_pf_interface fmt {negated ; if_name ; modifier } =
+  Fmt.pf fmt "%a%a:%s" pp_negation negated
+    pp_pf_name_or_macro if_name
+    (match modifier with
+     | None -> ""
+     | Some `network -> "network"
+     | Some `broadcast -> "broadcast"
+     | Some `peer -> "peer"
+     | Some `no_aliases -> ":0(no_aliases)")
+
+type pf_ifspec = If_list of pf_interface list
 
 let pp_pf_ifspec fmt = function
-  | If_list lst -> (*TODO this bool is a negation, should print "NOT" *)
-    Fmt.pf fmt "%a" Fmt.(list ~sep:(unit ", ")
-                         @@ pair ~sep:(unit "") pp_negation pp_pf_name_or_macro
-                        ) lst
+  | If_list lst ->
+    Fmt.pf fmt "%a" Fmt.(list ~sep:(unit ", ") pp_pf_interface) lst
 
 let a_ifspec : pf_ifspec t =
   a_match_or_list '{'
-    ( a_negated >>= fun neg ->
+    ( a_negated >>= fun negated ->
       a_ign_whitespace *>
-      a_interface_name >>| fun ifn -> (neg, ifn)
+      a_interface_name >>| fun (if_name, modifier) ->
+      {negated ; if_name ; modifier }
     ) >>| fun ifl -> If_list ifl
 
 type pf_flag_set = {f: bool; s: bool; r: bool; p: bool;
                     a: bool; u: bool; e: bool; w: bool}
 
+let string_of_flag_set v =
+  [ "F", v.f ; "S", v.s ; "R", v.r ; "P", v.p ;
+    "A", v.a ; "U", v.u ; "E", v.e ; "W", v.w ;
+  ] |> List.filter snd |> List.split |> fst |> String.concat ""
+
 type pf_flags =
   | Flags_any
   | Flag_set of pf_flag_set * pf_flag_set
+
+let pp_pf_flags fmt = function
+  | Flags_any -> Fmt.pf fmt "any"
+  | Flag_set (set, not_set) ->
+    Fmt.pf fmt "%s%s"
+      (string_of_flag_set set)
+      (match (string_of_flag_set not_set) with
+       | "" -> ""
+       | flags -> "/" ^ flags)
 
 let a_flags : pf_flags t =
   (* <a> /<b> | /<b> | "any" *)
@@ -213,9 +273,9 @@ type pf_fragmentation = | Reassemble
                         | Drop_ovl
 
 let pp_pf_fragmentation fmt = function
-  | Reassemble -> Fmt.pf fmt "reassemble"
-  | Crop -> Fmt.pf fmt "crop"
-  | Drop_ovl -> Fmt.pf fmt "drop-ovl"
+  | Reassemble -> Fmt.pf fmt "fragment reassemble"
+  | Crop -> Fmt.pf fmt "fragment crop"
+  | Drop_ovl -> Fmt.pf fmt "fragment drop-ovl"
 
 let a_fragmentation : pf_fragmentation t =
   string "fragment" *> a_whitespace *>
@@ -236,18 +296,17 @@ let a_ip : Ipaddr.t t =
   (a_ipv4_dotted_quad >>| fun ip -> Ipaddr.V4 ip)
   <|> (a_ipv6_coloned_hex >>| fun ip -> Ipaddr.V6 ip)
 
-let a_address =
+let a_address : pf_address t =
   (* interface-name | interface-group |
      "(" ( interface-name | interface-group ) ")" |
      hostname | ipv4-dotted-quad | ipv6-coloned-hex *)
   choice [
-    (encapsulated '(' ')' a_interface_name >>| fun name -> Dynamic_addr name);
+    (encapsulated '(' ')' a_interface_name >>| fun (name,_TODO_if_decoration) ->
+       Dynamic_addr name);
     (a_ip >>| fun ip -> IP ip);
-    (a_interface_name >>| fun name -> Fixed_addr name);
+    (a_interface_name >>| fun (name, unhandled_TODO_colons) -> Fixed_addr name);
     (* TODO handle difference between interface-name and interface-group*)
   ]
-
-let some t = t >>| fun applied -> Some applied
 
 let a_mask_bits = a_number_range 0 128
 
@@ -419,8 +478,8 @@ let pp_pf_hosts fmt v =
   | From_to { from_host ; from_port ; from_os ;
               to_host ; to_port } -> (*TODO*)
     Fmt.pf fmt "@[<v>from hosts: @[<v>%a@]@ from ports: @[<v>%a@]@ \
-                     from os: [@[<v>%a@]]@ to hosts: @[<v>%a@]@ \
-                     to ports: @[<v>%a@]@]"
+                from os: [@[<v>%a@]]@ to hosts: @[<v>%a@]@ \
+                to ports: @[<v>%a@]@]"
       pp_host from_host
       Fmt.(list pp_pf_op) from_port
       Fmt.(list ~sep:(unit ",@ ") string) from_os
@@ -429,11 +488,12 @@ let pp_pf_hosts fmt v =
 
 let a_os =
   string "os" *>
-  a_match_or_list '{' (a_string <|> a_unquoted_string)
+  a_match_or_list '{' (a_string_not [])
 
 let a_host : pf_host t =
   (* [ "!" ] ( address [ "/" mask-bits ] | "<" string ">" )
      string == table name *)
+  (* TODO note that host can have :0 appended, and that these can be ranges ('-') *)
   a_negated >>= fun negated ->
   a_ign_whitespace >>= fun () ->
   (    a_if_or_cidr >>| fun if_or_cidr ->
@@ -584,7 +644,7 @@ let pp_pf_logopts = Fmt.list pp_pf_logopt
 let a_logopt : pf_logopt t =
   choice [ string "all" *> return All ;
            string "user" *> return User ;
-           ( string "to" *> a_interface_name >>| fun to_if -> To to_if) ]
+           ( string "to" *> a_interface_name >>| fun (to_if,_TODOCOLONS) -> To to_if) ]
 
 type pf_routehost = pf_name_or_macro * (pf_address * int option) option
 (* why pf doesn't use pf_host here (allowing negation) is beyond me...
@@ -598,7 +658,7 @@ let pp_pf_routehost fmt (ifn, addrs) =
 
 let a_routehost : pf_routehost t =
   encapsulated '(' ')'
-    (a_interface_name >>= fun name ->
+    (a_interface_name >>= fun (name,_TODO_COLONS) ->
      (option None
         ( a_address >>= fun addr ->
           option None (a_ign_whitespace *> char '/' *>
@@ -613,23 +673,31 @@ let a_routehost_list : pf_routehost list t =
 
 type pf_pooltype =
   | Bitmask
-  | Random
+  | Random of bool (* sticky_address: true=present / false=not-present*)
   | Source_hash
-  | Round_robin
+  | Round_robin of bool (* sticky_address *)
 
 let pp_pf_pooltype fmt = function
   | Bitmask -> Fmt.pf fmt "Bitmask"
-  | Random -> Fmt.pf fmt "Random"
+  | Random sticky -> Fmt.pf fmt "Random (sticky-addr: %b)" sticky
   | Source_hash -> Fmt.pf fmt "Source hash"
-  | Round_robin -> Fmt.pf fmt "Round robin"
+  | Round_robin sticky -> Fmt.pf fmt "Round robin (sticky-addr: %b)" sticky
 
 let a_pooltype : pf_pooltype t =
+  let a_sticky_addr : bool t =
+    (a_whitespace *> string "sticky-address" *> return true)
+     <|> return false
+  in
   choice (*TODO*)
     [ string "bitmask" *> return Bitmask ;
-      string "random" *> return Random ;
+      string "random" *> a_sticky_addr >>|
+      (fun sticky_addr -> Random sticky_addr);
       string "source-hash" *> return Source_hash ;
-      string "round-robin" *> return Round_robin ;
+      string "round-robin" *> a_sticky_addr >>|
+      (fun sticky_addr -> Round_robin sticky_addr) ;
+      (* TODO When more than one redirection address is specified, round-robin is the only permitted pool type.*)
     ]
+(*  *)
 
 type pf_route =
   | Fastroute
@@ -701,6 +769,12 @@ type pf_tos = | Lowdelay
               | Reliability
               | Tos_number of int
 
+let pp_pf_tos fmt = function
+  | Lowdelay -> Fmt.pf fmt "lowdelay"
+  | Throughput -> Fmt.pf fmt "throughput"
+  | Reliability -> Fmt.pf fmt "reliability"
+  | Tos_number n -> Fmt.pf fmt "tos number: %d" n
+
 let a_tos : pf_tos t =
   choice [ string "lowdelay"    *> return Lowdelay ;
            string "throughput"  *> return Throughput ;
@@ -724,6 +798,9 @@ let a_group =
   string "group" *> a_whitespace *> a_match_or_list '{' (a_op ~candidates:None)
 
 type pf_timeout = string * int (* TODO *)
+
+let pp_pf_timeout fmt (name, seconds) =
+  Fmt.pf fmt "[%s: %ds]" name seconds
 
 let a_timeout : pf_timeout t =
   choice (List.map string (* These lifted from `man pf.conf`: *)
@@ -754,6 +831,30 @@ type pf_state_opt =
                 }
   | If_bound
   | Floating
+
+let pp_pf_state_opt fmt =
+  let rule_or_global_option = function
+    | None -> ""
+    | Some `rule -> " rule"
+    | Some `global -> " global"
+  in
+  function
+  | Max n -> Fmt.pf fmt "max: %d" n
+  | No_sync -> Fmt.pf fmt "no-sync"
+  | Timeout pf_to -> Fmt.pf fmt "timeout: %a" pp_pf_timeout pf_to
+  | Sloppy -> Fmt.pf fmt "sloppy"
+  | Pflow -> Fmt.pf fmt "pflow"
+  | Source_track x -> Fmt.pf fmt "source-track%s" (rule_or_global_option x)
+  | Max_src_nodes n -> Fmt.pf fmt "max-src-nodes: %d" n
+  | Max_src_states n -> Fmt.pf fmt "max-src-states: %d" n
+
+  | Max_src_conn n -> Fmt.pf fmt "max-src-conn: %d" n
+
+  | Max_src_conn_rate (n,n2) -> Fmt.pf fmt "max-src-conn-rate: %d / %d" n n2
+  | Overload {table ; flush} ->
+    Fmt.pf fmt "overload: <%s>: flush%s" table (rule_or_global_option flush)
+  | If_bound -> Fmt.pf fmt "if-bound"
+  | Floating -> Fmt.pf fmt "floating"
 
 let a_state_opt : pf_state_opt t =
   (* ( "max" number | "no-sync" | timeout | "sloppy" | "pflow" |
@@ -827,11 +928,22 @@ let pp_pf_filteropt fmt v =
     Fmt.pf fmt "users: @[%a@]" Fmt.(list ~sep pp_pf_op) ops
   | Filteropt_groups ops ->
     Fmt.pf fmt "groups: @[%a@]" Fmt.(list ~sep pp_pf_op) ops
-  | Flags _ -> Fmt.pf fmt "TODO-pp_pf_flags"
+  | Flags v -> Fmt.pf fmt "Flags: %a" pp_pf_flags v
   | Filteropt_icmp_type icmp -> Fmt.pf fmt "%a" pp_pf_icmp_type icmp
   | Filteropt_icmp6_type icmp6 -> Fmt.pf fmt "%a" pp_pf_icmp6_type icmp6
-  | Tos _ -> Fmt.pf fmt "tos"
-  | State _ -> Fmt.pf fmt "TODO-pp_pf_state"
+  | Tos tos -> Fmt.pf fmt "tos: %a" pp_pf_tos tos
+  | State {predicate; state_opts} ->
+    Fmt.pf fmt "@[<v>%s%a@]"
+      (match predicate with
+       | `no -> "NOT"
+       | `keep -> "keep"
+       | `modulate -> "modulate"
+       | `synproxy -> "synproxy")
+      (fun fmt -> function
+         | None -> Fmt.pf fmt ""
+         | Some state ->
+           Fmt.pf fmt " state:(@[<v>%a@])" (Fmt.list pp_pf_state_opt) state)
+      state_opts
   | Fragment -> Fmt.pf fmt "fragment"
   | Allow_opts -> Fmt.pf fmt "allow-opts"
   | Fragmentation frag -> Fmt.pf fmt "%a" pp_pf_fragmentation frag
@@ -840,9 +952,9 @@ let pp_pf_filteropt fmt v =
   | Max_mss n -> Fmt.pf fmt "max-mss: %d" n
   | Random_id -> Fmt.pf fmt "random-id"
   | Reassemble_tcp -> Fmt.pf fmt "reassemble-tcp"
-  | Label str -> Fmt.pf fmt "(Label: %s)" str
-  | Tag str -> Fmt.pf fmt "tag-%a" Fmt.(quote string) str
-  | Tagged (neg, s) -> Fmt.pf fmt "%a%s" pp_negation neg s
+  | Label str -> Fmt.pf fmt "Label: %s" str
+  | Tag str -> Fmt.pf fmt "Tag: %a" Fmt.(quote string) str
+  | Tagged (neg, s) -> Fmt.pf fmt "Tagged: %a%s" pp_negation neg s
   | Queue qlst -> Fmt.pf fmt "%a" Fmt.(list string) qlst
   | Rtable n -> Fmt.pf fmt "rtable: %d" n
   | Probability n -> Fmt.pf fmt "probability: %d%%" n
@@ -922,17 +1034,16 @@ let pp_pf_rule fmt { action; direction; logopts; quick; ifspec;
   let default = Fmt.unit "Default" in
   Fmt.pf fmt "@[<v>\
     { @[<v>\
-      Action: %a@ \
-      Traffic direction: %a@ \
-      Log options: %a@ \
-      Quick: %b@ \
-      Interface: %a@ \
-      Route: %a@ \
-      Address family: %a@ \
-      Protocol spec: %a@ \
-      Hosts: %a@ \
-      Filter options: @[<v>%a@]@,
-    @] }@]"
+      Action: %a ;@ \
+      Traffic direction: %a ;@ \
+      Log options: %a ;@ \
+      Quick: %b ;@ \
+      Interface: %a ;@ \
+      Route: %a ;@ \
+      Address family: %a ;@ \
+      Protocol spec: %a ;@ \
+      Hosts: %a ;@ \
+      Filter opts: @[<v>%a@]@] }@]@,"
     pp_pf_action action
     pp_direction direction
     Fmt.(option ~none:default pp_pf_logopts) logopts
@@ -1009,7 +1120,7 @@ struct
           (string "drop" <|> string "return")
           >>| fun pol -> Block_policy pol) ;
         ( string "skip" *> a_whitespace *> string "on" *>
-          a_interface_name >>| fun ifn -> Skip_on ifn
+          a_interface_name >>| fun (ifn, unhandled_TODO_colons) -> Skip_on ifn
         ) ;
         ( string "timeout" *> a_match_or_list '{' a_timeout
             >>| fun timeout -> Timeout timeout ) ;
@@ -1017,7 +1128,9 @@ struct
           a_match_or_list '{' a_limit_item >>| fun lmts -> Limit lmts ) ;
         ( string "loginterface" *> a_whitespace *>
           ( string "none" *> return None
-            <|> some a_interface_name) >>| fun ifn -> Loginterface ifn) ;
+            <|> some a_interface_name) >>| (function
+                   | Some (ifn, unhandled_TODO_colons) -> Some ifn
+                   | None -> None) >>| fun ifn -> Loginterface ifn) ;
         ( string "optimization" *> a_whitespace *>
           choice [ string "normal" ;
                    string "high-latency" ;
@@ -1037,6 +1150,15 @@ end
 type pf_portspec =
   pf_name_or_number * [`any | `port of pf_name_or_number ] option
 
+let pp_pf_portspec fmt (portspec:pf_portspec) =
+  let name_or_num , portopt = portspec in
+  Fmt.pf fmt "%a%a"
+    pp_pf_name_or_number name_or_num
+    Fmt.(option (fun fmt -> function
+       | `any -> Fmt.pf fmt ":any"
+       | `port num -> Fmt.pf fmt ":%a" pp_pf_name_or_number num
+    )) portopt
+
 let a_portspec : pf_portspec t =
   (*see a_port for note about known_tcp_service: *)
   let a_raw_port_number =
@@ -1048,6 +1170,20 @@ let a_portspec : pf_portspec t =
                 some ( (char '*' *> return `any)
                        <|> (a_raw_port_number >>| fun p -> `port p))
               ) >>| fun finish -> (start , finish)
+
+type nat_redirhosts =
+  { targets : if_or_cidr list ;
+    portspec : pf_portspec option ;
+    pooltype : pf_pooltype option ;
+    static_port : bool ;
+  }
+
+let pp_nat_redirhosts fmt {targets; portspec; pooltype; static_port}=
+  Fmt.pf fmt "%a %a %a %s"
+    Fmt.(list pp_if_or_cidr) targets
+    Fmt.(option pp_pf_portspec) portspec
+    Fmt.(option pp_pf_pooltype) pooltype
+    (match static_port with true -> "static-port" | false -> "")
 
 type pf_rdr_rule =
   { no : bool ;
@@ -1061,11 +1197,42 @@ type pf_rdr_rule =
     redirhosts : (if_or_cidr list  *
                  pf_portspec option * pf_pooltype option) option ;
   }
+let pp_a_trans_rule fmt no pass on af proto hosts tag tagged redirhosts =
+  Fmt.pf fmt "@[<v>%a%aon: %a@ addr family: %a@ \
+              protos: %a@ hosts: %a@ tag: %a@ tagged: %a@ \
+              -> %a@]"
+    pp_negation no
+    (fun fmt -> function
+     | None -> Fmt.pf fmt ""
+     | Some None -> Fmt.pf fmt "pass "
+     | Some (Some p) ->
+       Fmt.pf fmt "pass (logopt: %a) " pp_pf_logopts p
+    ) pass
+    Fmt.(option pp_pf_ifspec) on
+    Fmt.(option pp_pf_af) af
+    Fmt.(option pp_pf_protospec) proto
+    pp_pf_hosts hosts
+    Fmt.(option string) tag
+    Fmt.(option string) tagged
+    Fmt.(option pp_nat_redirhosts) redirhosts
 
-let a_rdr_rule : pf_rdr_rule t =
-  option false (a_ign_whitespace *> string "no" *> return true <* a_whitespace)
+let pp_pf_rdr_rule fmt r =
+  let redirhosts = match r.redirhosts with
+    | None -> None
+    | Some (targets,portspec,pooltype) ->
+      (*only diff between rdr and nat is the "static-port" flag:*)
+      Some {targets ; portspec; pooltype; static_port = false}
+  in
+  pp_a_trans_rule fmt r.no r.pass r.on r.af r.proto
+    r.hosts r.tag r.tagged redirhosts
+
+let a_trans_rule (ty:'nat_kind)
+  : (bool * 'o2 * 'o3 * pf_af option * 'o5 * 'o6 * 'o7 * 'o8 * 'o9) t=
+  option false (string "no" *> return true <* a_whitespace)
   >>= fun no ->
-  a_ign_whitespace *> string "rdr" *>
+  string begin match ty with | `rdr -> "rdr"
+                             | `nat -> "nat"
+  end *>
   option None ( a_whitespace *> string "pass" *>
                 option None ( a_whitespace *> string "log" *>
                               some (a_match_or_list '(' a_logopt)
@@ -1076,9 +1243,9 @@ let a_rdr_rule : pf_rdr_rule t =
   option None (a_whitespace *> some a_af) >>= fun af ->
   option None (a_whitespace *> some a_protospec) >>= fun proto ->
   a_hosts >>= fun hosts ->
-  option None (a_whitespace *> string "tag" *>
+  option None (a_whitespace *> string "tag" *> a_whitespace *>
                some (a_string_not []) ) >>=fun tag ->
-  option None ( a_whitespace *> string "tagged" *>
+  option None ( a_whitespace *> string "tagged" *> a_whitespace *>
                 some (a_string_not [])) >>= fun tagged ->
   option None ( a_whitespace *> string "->" *>
                 a_match_or_list '{' a_redirhost >>= fun redirhosts ->
@@ -1086,14 +1253,11 @@ let a_rdr_rule : pf_rdr_rule t =
                 option None (a_whitespace *> some a_pooltype)>>| fun pooltype ->
                 Some (redirhosts, portspec, pooltype)
               ) >>| fun redirhosts ->
-  {no ; pass ; on ; af; proto ; hosts ; tag; tagged ; redirhosts }
+  no, pass, on, af, proto, hosts, tag, tagged, redirhosts
 
-type nat_redirhosts =
-  { targets : if_or_cidr list ;
-    portspec : pf_portspec option ;
-    pooltype : pf_pooltype option ;
-    static_port : bool ;
-  }
+let a_rdr_rule : pf_rdr_rule t =
+  a_trans_rule `rdr >>| fun (no,pass,on,af,proto,hosts,tag,tagged,redirhosts) ->
+  {no ; pass ; on ; af; proto ; hosts ; tag; tagged ; redirhosts }
 
 type pf_nat_rule =
   { no : bool ;
@@ -1107,33 +1271,22 @@ type pf_nat_rule =
     redirhosts: nat_redirhosts option ;
   }
 
-let a_nat_rule =
-  (* TODO this is mostly code-cloned from a_rdr_rule *)
-  option false (a_ign_whitespace *> string "no" *> return true <* a_whitespace)
-  >>= fun no ->
-  a_ign_whitespace *> string "nat" *>
-    option None ( a_whitespace *> string "pass" *>
-                option None ( a_whitespace *> string "log" *>
-                              some (a_match_or_list '(' a_logopt)
-                            ) >>| fun log ->
-                Some log
-                ) >>= fun pass ->
-  option None ( a_whitespace *> string "on" *> some a_ifspec ) >>= fun on ->
-  option None (a_whitespace *> some a_af) >>= fun af ->
-  option None (a_whitespace *> some a_protospec) >>= fun proto ->
-  a_hosts >>= fun hosts ->
-  option None (a_whitespace *> string "tag" *> some a_string) >>= fun tag ->
-  option None ( a_whitespace *> string "tagged" *>
-                some a_string) >>= fun tagged ->
-  option None ( a_whitespace *> string "->" *>
-                a_match_or_list '{' a_redirhost >>= fun targets ->
-                option None (a_whitespace *> some a_portspec)>>= fun portspec ->
-                option None (a_whitespace *> some a_pooltype)>>= fun pooltype ->
-                option false (a_whitespace *> string "static-port" *>
-                              return true ) >>| fun static_port ->
-                Some {targets; portspec ; pooltype ; static_port}
-              ) >>| fun redirhosts ->
-  {no ; pass; on; af; proto; hosts; tag; tagged; redirhosts}
+let pp_pf_nat_rule fmt x =
+  pp_a_trans_rule fmt x.no x.pass x.on x.af x.proto x.hosts
+    x.tag x.tagged None ;
+  Fmt.(option pp_nat_redirhosts) fmt x.redirhosts
+
+let a_nat_rule : pf_nat_rule t =
+  a_trans_rule `nat
+  >>= fun (no,pass,on,af,proto,hosts,tag,tagged,x_redirhosts) ->
+  begin match x_redirhosts with
+    | None -> return None
+    | Some (targets, portspec, pooltype) ->
+      option false (a_whitespace *> string "static-port" *>
+                    return true ) >>| fun static_port ->
+      Some {targets; portspec ; pooltype ; static_port}
+  end >>| fun redirhosts ->
+  {no ; pass ; on ; af; proto ; hosts ; tag; tagged ; redirhosts }
 
 type pf_macro_definition = { name : string ;
                              definition : pf_name_or_macro list ; }
@@ -1248,6 +1401,9 @@ let a_schedulers : pf_scheduler t =
 
 type pf_queueopt =
   | Bandwidth of pf_bandwidth_spec
+  (* TODO "If bandwidth is not specified, the interface bandwidth
+     is used (but take note that some interfaces do not know
+     their bandwidth, or can adapt their bandwidth rates)." *)
   | Qlimit of int
   | Tbrsize of int
   | Priority of int
@@ -1259,8 +1415,8 @@ let a_queueopt : pf_queueopt t =
            (string "qlimit" *> a_whitespace *> a_number >>| fun n -> Qlimit n) ;
            ( string "tbrsize" *> a_whitespace *> a_number >>| fun n ->
              Tbrsize n) ;
-           ( string "priority" *> a_whitespace *> a_number >>| fun n ->
-             Priority n) ;
+           ( string "priority" *> a_whitespace *> a_number_range 0 15
+             >>| fun n ->Priority n) ;
            (a_schedulers >>| fun sc -> Schedulers sc);
   ]
 
@@ -1270,14 +1426,84 @@ type pf_queue_rule = { name : string ;
                        subqueues : string list ;
                      }
 
-let a_queue_rule =
+let a_queue_rule : pf_queue_rule t =
   string "queue" *> a_whitespace *> a_unquoted_string >>= fun name ->
   option None (a_whitespace *> string "on" *> a_whitespace *>
-               some a_interface_name ) >>= fun on ->
+               some a_interface_name ) >>| (function
+                       | Some (on, unhandled_TODO_colons) -> Some on
+                       | None -> None
+               ) >>= fun on ->
   a_whitespace *>
   sep_by a_whitespace a_queueopt >>= fun queueopts ->
   option [] (a_match_or_list '{' a_unquoted_string)  >>| fun subqueues ->
   { name ; on ; queueopts ; subqueues }
+
+type pf_altq_rule =
+  { on: pf_ifspec ;
+    queueopts: pf_queueopt list ;
+    subqueues: string list ;
+  }
+
+let pp_pf_altq_rule fmt {on ; queueopts ; subqueues} =
+  Fmt.pf fmt "@[<v>{ @[<v>on: %a@ queueopts: %a@ \
+              subqueues: {@[<v>%a@]}@]}@]"
+    pp_pf_ifspec on
+    Fmt.string "TODO queueopts"
+    Fmt.(list ~sep:(unit ", ") @@ suffix (unit ">")
+         @@ prefix (unit "<") string) subqueues
+
+let a_altq_rule =
+  string "altq on" *> a_whitespace *> a_ifspec >>= fun on ->
+  a_whitespace *> sep_by a_whitespace a_queueopt >>= fun queueopts ->
+  (if queueopts = [] then a_ign_whitespace else a_ign_whitespace) *>
+  string "queue" *> a_whitespace *>
+  option [] (a_match_or_list '{' a_unquoted_string) >>| fun subqueues ->
+  {on ; queueopts ; subqueues }
+
+type pf_load_anchor = { anchor_name : string ; filename : string }
+
+let pp_pf_load_anchor fmt v =
+  Fmt.pf fmt "Anchor %S (file %S)" v.anchor_name v.filename
+
+let a_load_anchor =
+  string "load anchor" *> a_whitespace *>
+  a_unquoted_string <* a_whitespace >>= fun anchor_name ->
+  string "from" *> a_string >>| fun filename -> {anchor_name ; filename }
+
+type 'a pf_trans_anchor =
+  (* this is called [trans-anchors] in the pf BNF grammar *)
+  { ty: 'a;
+    name : string ;
+    on : pf_ifspec ;
+    af : pf_af option ;
+    proto : pf_protospec option ;
+    hosts: pf_hosts ;
+  } constraint 'a = [< `nat | `rdr | `binat]
+
+let pp_pf_trans_anchor fmt x =
+  Fmt.pf fmt "{ @[<v>%s-anchor: %S@ on: %a@ addr family: %a@ protos: %a@ \
+              hosts: %a @]}"
+    (match x.ty with | `nat -> "nat"
+                     | `rdr -> "rdr"
+                     | `binat -> "binat")
+    x.name
+    pp_pf_ifspec x.on
+    Fmt.(option pp_pf_af) x.af
+    Fmt.(option pp_pf_protospec) x.proto
+    pp_pf_hosts x.hosts
+
+let a_trans_anchor (ty:'nat_kind) : 'nat_kind pf_trans_anchor t =
+  begin match ty with
+    | `nat -> string "nat-anchor"
+    | `rdr -> string "rdr-anchor"
+    | `binat -> string "binat-anchor"
+  end *>
+  a_whitespace *> a_string >>= fun name ->
+  option (If_list []) (a_whitespace *> a_ifspec) >>= fun on ->
+  option None (a_whitespace *> some a_af) >>= fun af ->
+  option None (a_whitespace *> some a_protospec) >>= fun proto ->
+  option All_hosts a_hosts >>= fun hosts ->
+  return { ty; name; on; af; proto ; hosts}
 
 type line = Include of string
           | Macro_definition of pf_macro_definition
@@ -1287,7 +1513,12 @@ type line = Include of string
           | Set of PF_set.set_t
           | Table_rule of pf_table_rule
           | Queue_rule of pf_queue_rule
+          | Altq_rule of pf_altq_rule
+          | Load_anchor of pf_load_anchor
           | Empty_line
+          | Nat_anchor of [`nat] pf_trans_anchor
+          | Rdr_anchor of [`rdr] pf_trans_anchor
+          | Binat_anchor of [`binat] pf_trans_anchor
 
 let pp_line fmt = function
   | Include  str -> Fmt.pf fmt "include %S" str
@@ -1296,30 +1527,44 @@ let pp_line fmt = function
       Fmt.(list ~sep:(unit " ") pp_pf_name_or_macro) definition
   | Pf_rule rule -> Fmt.pf fmt "%a" pp_pf_rule rule
   | Empty_line -> Fmt.pf fmt ""
-  | Rdr_rule _ -> Fmt.pf fmt "TODO sorry cannot pretty-print [rdr]"
-  | NAT_rule _ -> Fmt.pf fmt "TODO sorry cannot pretty-print [NAT]"
+  | Rdr_rule v -> Fmt.pf fmt "rdr-rule: %a" pp_pf_rdr_rule v
+  | NAT_rule v -> Fmt.pf fmt "nat-rule: %a" pp_pf_nat_rule v
   | Set _ -> Fmt.pf fmt "TODO sorry cannot pretty-print [set]"
   | Table_rule _ -> Fmt.pf fmt "TODO sorry cannot pretty-print [table]"
   | Queue_rule _ -> Fmt.pf fmt "TODO sorry cannot pretty-print [queue]"
+  | Altq_rule altq -> Fmt.pf fmt "altq: %a" pp_pf_altq_rule altq
+  | Load_anchor anchor -> Fmt.pf fmt "load-anchor %a" pp_pf_load_anchor anchor
+  | Nat_anchor x -> Fmt.pf fmt "%a" pp_pf_trans_anchor x
+  | Rdr_anchor x -> Fmt.pf fmt "%a" pp_pf_trans_anchor x
+  | Binat_anchor x -> Fmt.pf fmt "%a" pp_pf_trans_anchor x
 
-let a_line =
+      let a_line =
   (* option | pf-rule | nat-rule | binat-rule | rdr-rule |
      antispoof-rule | altq-rule | queue-rule | trans-anchors |
      anchor-rule | anchor-close | load-anchor | table-rule |
      include *)
   a_ign_whitespace *>
   Angstrom.choice
-    [ (a_include >>| fun filename -> Include filename) ;
-      (a_macro_definition >>| fun macro -> Macro_definition macro) ;
-      (a_rdr_rule >>| fun rule -> Rdr_rule rule) ;
+    [ (a_ign_whitespace *> end_of_input *> return Empty_line) ;
       (a_pf_rule >>| fun rule -> Pf_rule rule) ;
+      (a_include >>| fun filename -> Include filename) ;
+      (a_trans_anchor `nat >>| fun anch -> Nat_anchor anch) ;
+      (a_trans_anchor `rdr >>| fun anch -> Rdr_anchor anch) ;
+      (a_trans_anchor `binat >>| fun anch -> Binat_anchor anch) ;
+      (a_rdr_rule >>| fun rule -> Rdr_rule rule) ;
       (a_nat_rule >>| fun rule -> NAT_rule rule) ;
       (a_queue_rule >>| fun rule -> Queue_rule rule) ;
+      (a_altq_rule >>| fun rule -> Altq_rule rule) ;
       (PF_set.a_set >>| fun set -> Set set) ;
-      (a_ign_whitespace *> end_of_input *> return Empty_line) ;
-      (a_ign_whitespace *> a_table_rule >>| fun rule -> Table_rule rule) ;
+      (a_table_rule >>| fun rule -> Table_rule rule) ;
+      (a_load_anchor >>| fun rule -> Load_anchor rule) ;
+      (a_macro_definition >>| fun macro -> Macro_definition macro) ;
     ]
-  <* a_ign_whitespace <* end_of_input (* make sure we parsed it all *)
+  <* a_ign_whitespace <*
+  ( available >>= peek_string >>= fun left ->
+    (end_of_input (* make sure we parsed it all *)
+    <?> "Leftover at end:" ^ left)
+  )
 
 let into_lines config_str =
   let a_line_split =

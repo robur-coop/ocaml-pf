@@ -18,6 +18,9 @@ let iana_protocols = (* see /etc/protocols *)
     "ipip",   94 ;
     "l2tp",  115 ;
     "sctp",  132 ;
+    "carp",  112 ; (* CARP vrrp # Common Address Redundancy Protocol *)
+    "pfsync",240 ;
+
   ]
 
 let iana_icmp_types = (* see `man icmp` *)

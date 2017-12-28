@@ -11,7 +11,7 @@ let () =
   match Pf.Parse.into_lines str with
   | Ok rules ->
     List.iteri (fun i line ->
-        Fmt.pr "Line %d: @[<v>%a@]\n" i Pf.Parse.pp_line line
+            Fmt.pr "Line %d: @[<v>%a@]@." (i+1) Pf.Parse.pp_line line
       ) rules;
     Printf.printf "Read %d lines!\n" (List.length rules)
   | Error s -> Printf.printf "error: %s\n" s

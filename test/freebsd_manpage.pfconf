@@ -117,4 +117,30 @@ block quick from <bad_hosts>
 pass in on $ext_if proto tcp to $webserver port www keep state \
      (max-src-conn-rate 100/10, overload <bad_hosts> flush global)
 
+######### the rules below are not from `man pf.conf`, but are here for \
+          regression testing:
 
+rdr on $ext_if inet proto tcp from <spammers> to port smtp tag SPAMD \
+     -> 127.0.0.1 port spamd
+pass in on $ext_if inet proto tcp tagged SPAMD
+table <BLOCKPERM> counters file "/somedir/block_permanent"
+set timeout { tcp.closing 60, tcp.established 7200}
+scrub out log on $ExtIf all random-id min-ttl 15 set-tos 0x1c fragment reassemble
+nat on $ExtIf from $Xbox360 -> ($ExtIf) static-port
+rdr on $ExtIf inet proto tcp from !<spamd-white> to ($ExtIf) port smtp -> 10.10.10.200 port spamd
+
+table <tbl_Geo2ipCountry_SO> persist file "/etc/firewall/tables/dynamic/geo2ip_country_SO.tb" # Somalia
+pass from <tbl_Geo2ipCountry_SO> to any tag FROM_SO label "tag packets from Somalia"
+
+pass quick proto carp all keep state (no-sync) label "Allow CARP"
+
+# TODO rdr on $IntIf inet proto udp from $IntIf:network to $IntIf port domain -> lo0
+nat-anchor "ftp-proxy/*"
+# TODO anchor geo2ip
+load anchor geo2ip from "/etc/firewall/anchors/geo2ip.rules.pf.conf"
+
+block log quick all tagged TO_CN
+
+altq on dc0 cbq bandwidth 5Mb queue { std, http, mail, ssh }
+
+pass flags S/A flags S/F tag "TODO research how this should be handled"
