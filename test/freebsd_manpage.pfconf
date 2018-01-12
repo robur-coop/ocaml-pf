@@ -144,3 +144,5 @@ block log quick all tagged TO_CN
 altq on dc0 cbq bandwidth 5Mb queue { std, http, mail, ssh }
 
 pass flags S/A flags S/F tag "TODO research how this should be handled"
+
+rdr pass on {$int_if,enc0} inet proto {tcp,udp} from any to !($int_if:0) port 53 -> ($int_if:0) port 53
