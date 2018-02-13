@@ -308,7 +308,10 @@ let a_address : pf_address t =
     (* TODO handle difference between interface-name and interface-group*)
   ]
 
-let a_mask_bits = a_number_range 0 128
+type pf_af = Inet | Inet6
+
+let a_mask_bits ~af = a_number_range 0 (match af with | Inet -> 32
+                                                      | Inet6 -> 128)
 
 type pf_name_or_number = | Name of pf_name_or_macro
                          | Number of int
@@ -405,7 +408,7 @@ let pp_if_or_cidr fmt (w: if_or_cidr) =
   | Fixed_if   v -> Fmt.pf fmt "(Fixed_if %a)" pp_pf_name_or_macro v
   | CIDR       v -> Fmt.pf fmt "(CIDR %a)" Ipaddr.Prefix.pp_hum v
 
-let a_if_or_cidr : if_or_cidr t =
+let a_cidr : Ipaddr.Prefix.t t =
   let expand_ipv4 prefix =
     let provided_octets = List.length (String.split_on_char '.' prefix) in
     let padding = String.init ((4 - provided_octets)*2)
@@ -413,34 +416,52 @@ let a_if_or_cidr : if_or_cidr t =
                   | _ -> '0')
     in prefix ^ padding
   in
-  ((a_address)
-   <|> ( take_while1 ( function | '0'..'9' | '.'-> true
+  let a_and_mask ip =
+    let af = match ip with Ipaddr.V4 _ -> Inet
+                         | V6 _ -> Inet6 in
+    option None (a_ign_whitespace *> char '/' *> some (a_mask_bits ~af))
+    >>| begin function
+      | None -> begin match af with Inet -> 32 | Inet6 -> 128 end
+      | Some mask -> mask
+    end >>= fun mask ->
+    begin match (Ipaddr.to_string ip) ^ "/" ^ (string_of_int mask)
+                |> Ipaddr.Prefix.of_string
+      with
+      | None -> fail "invalid CIDR"
+      | Some cidr -> return cidr
+    end
+  in
+  ( ( ( take_while1 ( function | '0'..'9' | '.'-> true
                                | _ -> false
-     ) >>| expand_ipv4 >>| Ipaddr.V4.of_string >>= function
-       | Some x -> return (IP (Ipaddr.V4 x))
-       | None -> fail "invalid short ipv4 CIDR"
-     )
-  ) >>= begin function
-  | (Dynamic_addr x) -> return @@ `pass (Dynamic_if x)
-  | (Fixed_addr x) ->   return @@ `pass (Fixed_if x)
-  | IP ((Ipaddr.V4 _) as ip) -> return (`ip ("/32", ip))
-  | IP ((Ipaddr.V6 _) as ip) -> return (`ip ("/128",ip))
-  end >>= function
-  | `pass ret -> return ret
-  | `ip (default_cidr, ip) ->
-    option None (a_ign_whitespace *> char '/' *> some a_mask_bits)
-    >>= (function
-        | Some mask ->
-          begin match (Ipaddr.to_string ip) ^ "/" ^ (string_of_int mask)
-                      |> Ipaddr.Prefix.of_string
-            with
-            | None -> fail "invalid CIDR"
-            | Some cidr -> return (CIDR cidr)
-          end
-        | None ->
-          CIDR Ipaddr.( (to_string ip) ^ default_cidr
-                        |> Prefix.of_string_exn ) |> return
+      ) >>= (fun octets -> peek_char >>=
+              begin function (* TODO hack to make ipv6 work: *)
+                | Some (':'|'a'..'f'|'A'..'F') -> fail "not ipv4"
+                | _ -> return octets end
+            ) >>| expand_ipv4 >>| Ipaddr.V4.of_string >>= function
+        | Some x -> a_and_mask (Ipaddr.V4 x)
+        | None -> fail "invalid short ipv4 CIDR"
       )
+      ) <|> (
+      (take_while1 ( function | '0'..'9' | 'a'..'f' | 'A'..'F' | ':' -> true
+                              | _ -> false
+         ) (* TODO expand_ipv6 *)
+       >>| Ipaddr.V6.of_string >>= (function
+           | None -> fail "invalid ipv6 CIDR"
+           | Some x -> a_and_mask (Ipaddr.V6 x)
+         )
+      )
+    )
+  )
+
+let a_if_or_cidr : if_or_cidr t =
+  (a_cidr >>| fun ip -> (CIDR ip))
+  <|>
+  ( (a_address)
+    >>= begin function
+      | (Dynamic_addr x) -> return (Dynamic_if x)
+      | (Fixed_addr x) ->   return (Fixed_if x)
+      | IP _ -> fail "TODO a_if_or_cidr: a_cidr didn't catch IP"
+    end )
 
 let a_redirhost = a_if_or_cidr
 
@@ -662,7 +683,7 @@ let a_routehost : pf_routehost t =
      (option None
         ( a_address >>= fun addr ->
           option None (a_ign_whitespace *> char '/' *>
-                       some a_mask_bits) >>| fun mask ->
+                       some (a_mask_bits ~af:Inet6)) >>| fun mask ->
           Some (addr, mask)
         )
      ) >>| fun addr_and_mask -> name, addr_and_mask
@@ -1007,8 +1028,6 @@ let pp_direction fmt = function
   | Outgoing -> Fmt.pf fmt "Outgoing"
   | Both_directions -> Fmt.pf fmt "Bidirectional"
 
-type pf_af = Inet | Inet6
-
 let pp_pf_af fmt = function
   | Inet -> Fmt.pf fmt "IPv4"
   | Inet6 -> Fmt.pf fmt "IPv6"
@@ -1027,6 +1046,19 @@ type pf_rule =
     protospec : pf_protospec option ;
     hosts : pf_hosts ;
     filteropts : pf_filteropt list ;
+  }
+
+let empty_pf_rule =
+  { action = Block None ;
+    direction = Both_directions ;
+    logopts = None ;
+    quick = false ;
+    ifspec = None ;
+    route = None ;
+    af = None;
+    protospec = None ;
+    hosts = All_hosts ;
+    filteropts = [] ;
   }
 
 let pp_pf_rule fmt { action; direction; logopts; quick; ifspec;
