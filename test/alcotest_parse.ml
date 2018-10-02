@@ -11,15 +11,37 @@ open Pf.Parse
 let alc_rule = Alcotest.testable pp_pf_rule (fun a b -> a = b)
 (*into_lines*)
 
+let alc_address = Alcotest.testable pp_pf_address (=)
+
 let alc_qubes = Alcotest.testable Pf.Parse_qubes.pp_rule (fun a b -> a = b)
 
-open Pf.Parse_qubes
+let parse_full a s = Angstrom.(parse_string (a <* end_of_input) s)
 
 let host_addr str = (* helper function *)
   Host_addr { negated = false ;
               if_or_cidr =
                 CIDR (Ipaddr.Prefix.of_string str |> function Some x -> x)
             }
+
+let test_address_ipv6 () =
+  Alcotest.(check @@ result alc_address reject) "IS-OK fe80::123"
+    (Ok (IP (match Ipaddr.V6.of_string "fe80::123" with
+         | Some ip -> V6 ip | None -> failwith "Ipaddr.IPv6")))
+    (parse_full Pf.Parse.a_address "fe80::123") ;
+
+  Alcotest.(check @@ result alc_address reject) "IS-OK fe80::123%vlans0.123"
+    (Ok (IP (match Ipaddr.V6.of_string "fe80::123%vlans0.123" with
+         | Some ip -> V6 ip
+         | None -> Alcotest.fail "Ipaddr.IPv6 not supporting zone ID")))
+    (parse_full Pf.Parse.a_address "fe80::123%vlans0.123") ;
+
+  (* reject ifspec/vlanspec on global / NON-site-local addr: *)
+  Alcotest.(check @@ result reject pass)
+    "REJECT ifspec/vlanspec on global scope IPv6 addr: 1234::123%vlans0.123"
+    (Error "TODOwhattoputhere")
+    (parse_full Pf.Parse.a_address "1234::123%vlans0.123")
+
+open Pf.Parse_qubes
 
 let qubes str =
   Pf.Parse_qubes.parse_qubes_v4
@@ -135,7 +157,10 @@ let tests =
       test_qubes_dns ;
       "Handling of IPv6 rules", `Quick, test_qubes_ipv6;
       "action=accept specialtarget=dns", `Quick, test_qubes_unimplemented
-    ]
+    ] ;
+    "Primitives",
+    [ "address: IPv6", `Quick, test_address_ipv6 ;
+    ] ;
   ]
 
 let () =

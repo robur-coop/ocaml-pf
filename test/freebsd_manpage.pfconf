@@ -146,3 +146,14 @@ altq on dc0 cbq bandwidth 5Mb queue { std, http, mail, ssh }
 pass flags S/A flags S/F tag "TODO research how this should be handled"
 
 rdr pass on {$int_if,enc0} inet proto {tcp,udp} from any to !($int_if:0) port 53 -> ($int_if:0) port 53
+
+# IPv6 site-local
+pass quick inet6 from any to fe80::123
+
+# IPv6 site-local with zone ID 1:
+pass quick inet6 from any to fe80::456%1
+
+# IPv6 site-local with zone ID lagg0.1181 (aka VLAN 1181 on if lagg0)
+pass quick inet6 from any to fe80::123:4567:8910:1112%lagg0.1181
+# ^-- pf transforms this to:
+pass quick on lagg0.1181 inet6 from any to fe80::123:4567:8910:1112 flags S/SA keep state
