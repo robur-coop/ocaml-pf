@@ -1,5 +1,23 @@
 open Angstrom
 
+let pp_iff_condition printer pp condition fmt data =
+  match condition data with
+  | Some data ->
+    printer (Fmt.pf fmt) pp data
+  | None -> ()
+
+let pp_skip_empty printer pp =
+  pp_iff_condition printer
+    Fmt.(list ~sep:(unit",@ ") pp)
+    (function [] -> None | x -> Some x)
+
+let pp_skip_none printer pp =
+  pp_iff_condition printer pp (fun x -> x)
+
+let pp_skip_false printer =
+  pp_iff_condition printer Fmt.bool
+    (function true -> Some true | false -> None)
+
 let a_comment : unit t = (char '#' *> available >>= advance) (* eat the rest *)
 
 let a_negated : bool t = option false (char '!' *> return true)
@@ -472,7 +490,7 @@ type pf_host =
 
 let pp_pf_host fmt = function
   | Table_name (neg, name) ->
-    Fmt.pf fmt "%a%s" pp_negation neg name
+    Fmt.pf fmt "%a<%s>" pp_negation neg name
   | Host_addr {negated; if_or_cidr } ->
     Fmt.pf fmt "%a%a" pp_negation negated pp_if_or_cidr if_or_cidr
 
@@ -492,20 +510,20 @@ let pp_pf_hosts fmt v =
     | `no_route -> Fmt.pf fmt "no-route"
     | `urpf_failed -> Fmt.pf fmt "urpf-failed"
     | `self -> Fmt.pf fmt "self"
-    | `hosts x -> Fmt.pf fmt "%a" Fmt.(list pp_pf_host) x
+    | `hosts x -> Fmt.pf fmt "[%a]" Fmt.(list pp_pf_host) x
   in
   match v with
   | All_hosts -> Fmt.pf fmt "(all hosts)"
   | From_to { from_host ; from_port ; from_os ;
               to_host ; to_port } -> (*TODO*)
-    Fmt.pf fmt "@[<v>from hosts: @[<v>%a@]@ from ports: @[<v>%a@]@ \
-                from os: [@[<v>%a@]]@ to hosts: @[<v>%a@]@ \
-                to ports: @[<v>%a@]@]"
-      pp_host from_host
-      Fmt.(list pp_pf_op) from_port
-      Fmt.(list ~sep:(unit ",@ ") string) from_os
-      pp_host to_host
-      Fmt.(list pp_pf_op) to_port
+    Fmt.pf fmt "@[<v>%a%a%a%a%a@]"
+      (pp_iff_condition (fun m -> m "from hosts: @[<v>%a@]")
+         pp_host (function `any -> None | x -> Some x)) from_host
+      (pp_skip_empty (fun m -> m "@ from ports: @[<v>%a@]") pp_pf_op) from_port
+      (pp_skip_empty (fun m -> m "@ from os: [@[<v>%a@]]") Fmt.string) from_os
+      (pp_iff_condition (fun m -> m "@ to hosts: @[<v>%a@]")
+         pp_host (function `any -> None | x -> Some x)) to_host
+      (pp_skip_empty (fun m -> m "@ to ports: @[<v>%a@]") pp_pf_op) to_port
 
 let a_os =
   string "os" *>
@@ -642,7 +660,7 @@ let a_proto_name_or_number : pf_name_or_number t =
 type pf_protospec = Proto_list of pf_name_or_number list
 
 let pp_pf_protospec fmt = function
-    Proto_list lst -> Fmt.pf fmt "[%a]" Fmt.(list ~sep:(unit ",@ ")
+    Proto_list lst -> Fmt.pf fmt "[@[%a@]]" Fmt.(list ~sep:(unit ",@ ")
                                              pp_pf_name_or_number) lst
 
 let a_protospec : pf_protospec t =
@@ -821,7 +839,7 @@ let a_group =
 type pf_timeout = string * int (* TODO *)
 
 let pp_pf_timeout fmt (name, seconds) =
-  Fmt.pf fmt "[%s: %ds]" name seconds
+  Fmt.pf fmt "(%S: %ds)" name seconds
 
 let a_timeout : pf_timeout t =
   choice (List.map string (* These lifted from `man pf.conf`: *)
@@ -1067,25 +1085,29 @@ let pp_pf_rule fmt { action; direction; logopts; quick; ifspec;
   Fmt.pf fmt "@[<v>\
     { @[<v>\
       Action: %a ;@ \
-      Traffic direction: %a ;@ \
-      Log options: %a ;@ \
-      Quick: %b ;@ \
-      Interface: %a ;@ \
-      Route: %a ;@ \
-      Address family: %a ;@ \
-      Protocol spec: %a ;@ \
-      Hosts: %a ;@ \
-      Filter opts: @[<v>%a@]@] }@]@,"
+      Traffic direction: %a ;\
+      %a\
+      %a\
+      %a\
+      %a\
+      %a\
+      %a\
+      %a\
+      %a@] }@]"
     pp_pf_action action
     pp_direction direction
-    Fmt.(option ~none:default pp_pf_logopts) logopts
-    quick
-    Fmt.(option ~none:default pp_pf_ifspec) ifspec
-    Fmt.(option ~none:default pp_pf_route) route
-    Fmt.(option ~none:default pp_pf_af) af
-    Fmt.(option ~none:default pp_pf_protospec) protospec
-    pp_pf_hosts hosts
-    Fmt.(list pp_pf_filteropt) filteropts
+    (pp_skip_none (fun m -> m "@ Log options: %a ;") pp_pf_logopts) logopts
+    (pp_skip_false (fun m -> m "@ Quick: %a;")) quick
+    (pp_skip_none (fun m -> m "@ Interface: %a ;") pp_pf_ifspec) ifspec
+    (pp_skip_none (fun m -> m "@ Route: %a ;") pp_pf_route) route
+    (pp_skip_none (fun m -> m "@ Address family: %a ;") pp_pf_af) af
+    (pp_skip_none (fun m -> m "@ Protocol spec: %a ;") pp_pf_protospec
+    ) protospec
+    (pp_iff_condition (fun m -> m "@ Hosts: %a ;") pp_pf_hosts
+       (function All_hosts -> None | x -> Some x)
+    ) hosts
+    (pp_skip_empty (fun m -> m"@ Filter opts: @[<v>%a@]")
+       pp_pf_filteropt) filteropts
 
 let a_pf_rule : pf_rule t =
   a_action >>= fun action ->
@@ -1112,6 +1134,7 @@ let a_pf_rule : pf_rule t =
 module PF_set =
 struct
   type debug_level = Debug_none | Debug_urgent | Debug_misc | Debug_loud
+
   type set_t = Debug of debug_level
              | Hostid of int (* TODO 32-bits *)
              | State_policy of string
@@ -1123,6 +1146,38 @@ struct
              | Optimization of string (*TODO*)
              | State_defaults of pf_state_opt list
              | Fingerprints of string (* filename *)
+
+  let pp_debug_level fmt lvl =
+    Fmt.pf fmt "(Debug level: %s)" (match lvl with
+        | Debug_none -> "None"
+        | Debug_urgent -> "Urgent"
+        | Debug_misc -> "Misc"
+        | Debug_loud -> "Loud")
+
+  let pp fmt =
+    let sep = Fmt.unit "; " in
+    let none = Fmt.unit "none" in
+    function
+    | Debug lvl -> pp_debug_level fmt lvl
+    | Hostid id -> Fmt.pf fmt "(Hostid %d)" id
+    | State_policy pol -> Fmt.pf fmt "(State policy: %S)" pol
+    | Block_policy pol -> Fmt.pf fmt "(Block policy: %S)" pol
+    | Skip_on name ->
+      Fmt.pf fmt "(Skip on: %a)" pp_pf_name_or_macro name
+    | Timeout lst ->
+      Fmt.pf fmt "(Timeout: @[<v>%a@])" Fmt.(list ~sep pp_pf_timeout) lst
+    | Limit lst ->
+      Fmt.pf fmt "(Limit %a)"
+        Fmt.(list ~sep @@ pair ~sep:(unit": ") string int) lst
+    | Loginterface name ->
+      Fmt.pf fmt "(Loginterface %a)"
+        Fmt.(option ~none pp_pf_name_or_macro) name
+    | Optimization str ->
+      Fmt.pf fmt "(Optimization: %S)" str
+    | State_defaults lst ->
+      Fmt.pf fmt "(State-defaults %a)" Fmt.(list ~sep pp_pf_state_opt) lst
+    | Fingerprints fp_str ->
+      Fmt.pf fmt "(Fingerprints %S)" fp_str
 
   let a_limit_item =
     choice [ string "states" ;
@@ -1230,22 +1285,22 @@ type pf_rdr_rule =
                  pf_portspec option * pf_pooltype option) option ;
   }
 let pp_a_trans_rule fmt no pass on af proto hosts tag tagged redirhosts =
-  Fmt.pf fmt "@[<v>%a%aon: %a@ addr family: %a@ \
-              protos: %a@ hosts: %a@ tag: %a@ tagged: %a@ \
+  Fmt.pf fmt "@[<v>%a%a%aaddr family: %a@ \
+              protos: %a@ hosts: %a@ %a%a\
               -> %a@]"
     pp_negation no
     (fun fmt -> function
-     | None -> Fmt.pf fmt ""
+     | None -> ()
      | Some None -> Fmt.pf fmt "pass "
      | Some (Some p) ->
        Fmt.pf fmt "pass (logopt: %a) " pp_pf_logopts p
     ) pass
-    Fmt.(option pp_pf_ifspec) on
+    (pp_skip_none (fun m -> m "on: %a@ ") pp_pf_ifspec) on
     Fmt.(option pp_pf_af) af
     Fmt.(option pp_pf_protospec) proto
     pp_pf_hosts hosts
-    Fmt.(option string) tag
-    Fmt.(option string) tagged
+    (pp_skip_none (fun m -> m "tag: %a@ ") Fmt.string) tag
+    (pp_skip_none (fun m -> m "tagged: %a@ ") Fmt.string) tagged
     Fmt.(option pp_nat_redirhosts) redirhosts
 
 let pp_pf_rdr_rule fmt r =
@@ -1340,6 +1395,11 @@ type pf_tableaddr =
   | Table_if_or_cidr of if_or_cidr
   | Self
 
+let pp_pf_tableaddr fmt = function
+  | Table_hostname name -> Fmt.pf fmt "Hostname: %S" name
+  | Table_if_or_cidr addr -> Fmt.pf fmt "Addr: %a" pp_if_or_cidr addr
+  | Self -> Fmt.pf fmt "Self"
+
 let a_tableaddr =
   choice [ string "self" *> return Self;
            (a_unquoted_string >>| fun host -> Table_hostname host) ; (*TODO*)
@@ -1351,6 +1411,15 @@ type pf_table_opts = | Persist
                      | Counters
                      | File of string
                      | Tableaddr of pf_tableaddr list
+
+let pp_pf_table_opts fmt = function
+  | Persist -> Fmt.pf fmt "Persist"
+  | Const -> Fmt.pf fmt "Const"
+  | Counters -> Fmt.pf fmt "Counters"
+  | File name -> Fmt.pf fmt "(File: %S)" name
+  | Tableaddr lst ->
+    Fmt.pf fmt "Tableaddr: [@[%a@]]"
+      Fmt.(list ~sep:(unit "@ ") pp_pf_tableaddr) lst
 
 let a_table_opts =
   choice [ string "persist" *> return Persist ;
@@ -1364,6 +1433,10 @@ let a_table_opts =
 
 type pf_table_rule = { name : string ;
                        table_opts : pf_table_opts list ; }
+
+let pp_pf_table_rule fmt {name; table_opts} =
+  Fmt.pf fmt "{ @[<v>table: %S options: %a@]}" name
+    Fmt.(list ~sep:(unit"@ ") pp_pf_table_opts) table_opts
 
 let a_table_rule : pf_table_rule t =
   string "table" *> encapsulated '<' '>' a_unquoted_string >>= fun name ->
@@ -1555,20 +1628,21 @@ type line = Include of string
 let pp_line fmt = function
   | Include  str -> Fmt.pf fmt "include %S" str
   | Macro_definition { name; definition } ->
-    Fmt.pf fmt "%s = %a" name
+    Fmt.pf fmt "macro %S = %a" name
       Fmt.(list ~sep:(unit " ") pp_pf_name_or_macro) definition
-  | Pf_rule rule -> Fmt.pf fmt "%a" pp_pf_rule rule
+  | Pf_rule rule -> Fmt.pf fmt "rule: %a" pp_pf_rule rule
   | Empty_line -> Fmt.pf fmt ""
   | Rdr_rule v -> Fmt.pf fmt "rdr-rule: %a" pp_pf_rdr_rule v
   | NAT_rule v -> Fmt.pf fmt "nat-rule: %a" pp_pf_nat_rule v
-  | Set _ -> Fmt.pf fmt "TODO sorry cannot pretty-print [set]"
-  | Table_rule _ -> Fmt.pf fmt "TODO sorry cannot pretty-print [table]"
+  | Set set -> Fmt.pf fmt "set: @[<v>%a@]" PF_set.pp set
+  | Table_rule table_rule ->
+    Fmt.pf fmt "table: @[<v>%a@]" pp_pf_table_rule table_rule
   | Queue_rule _ -> Fmt.pf fmt "TODO sorry cannot pretty-print [queue]"
   | Altq_rule altq -> Fmt.pf fmt "altq: %a" pp_pf_altq_rule altq
   | Load_anchor anchor -> Fmt.pf fmt "load-anchor %a" pp_pf_load_anchor anchor
-  | Nat_anchor x -> Fmt.pf fmt "%a" pp_pf_trans_anchor x
-  | Rdr_anchor x -> Fmt.pf fmt "%a" pp_pf_trans_anchor x
-  | Binat_anchor x -> Fmt.pf fmt "%a" pp_pf_trans_anchor x
+  | Nat_anchor x -> Fmt.pf fmt "nat: %a" pp_pf_trans_anchor x
+  | Rdr_anchor x -> Fmt.pf fmt "rdr: %a" pp_pf_trans_anchor x
+  | Binat_anchor x -> Fmt.pf fmt "binat: %a" pp_pf_trans_anchor x
 
       let a_line =
   (* option | pf-rule | nat-rule | binat-rule | rdr-rule |
