@@ -137,15 +137,15 @@ let a_include =
 let a_ipv4_dotted_quad =
   take_while1 (function '0'..'9' |'.' -> true | _ -> false) >>= fun ip ->
   match Ipaddr.V4.of_string ip with
-    | None -> fail (Fmt.strf "Invalid IPv4: %S" ip)
-    | Some ip -> return ip
+    | Error (`Msg s) -> fail (Fmt.strf "Invalid IPv4 (%s): %S" s ip)
+    | Ok ip -> return ip
 
 let a_ipv6_coloned_hex =
   take_while1 (function '0'..'9' | ':' | 'a'..'f' | 'A'..'F' -> true
                                  | _ -> false) >>= fun ip ->
   match Ipaddr.V6.of_string ip with
-  | None -> fail (Fmt.strf "Invalid IPv6: %S" ip)
-  | Some ip -> return ip
+    | Error (`Msg s) -> fail (Fmt.strf "Invalid IPv6 (%s): %S" s ip)
+    | Ok ip -> return ip
 
 type pf_bandwidth_spec =
   | B of int
@@ -306,7 +306,7 @@ type pf_address = | IP of Ipaddr.t
                   | Fixed_addr of pf_name_or_macro
 
 let pp_pf_address fmt = function
-  | IP v -> Ipaddr.pp_hum fmt v
+  | IP v -> Ipaddr.pp fmt v
   | Dynamic_addr addr -> Fmt.pf fmt "(%a)" pp_pf_name_or_macro addr
   | Fixed_addr addr -> Fmt.pf fmt "%a" pp_pf_name_or_macro addr
 
@@ -424,7 +424,7 @@ let pp_if_or_cidr fmt (w: if_or_cidr) =
   match w with
   | Dynamic_if v -> Fmt.pf fmt "(Dynamic_if %a)" pp_pf_name_or_macro v
   | Fixed_if   v -> Fmt.pf fmt "(Fixed_if %a)" pp_pf_name_or_macro v
-  | CIDR       v -> Fmt.pf fmt "(CIDR %a)" Ipaddr.Prefix.pp_hum v
+  | CIDR       v -> Fmt.pf fmt "(CIDR %a)" Ipaddr.Prefix.pp v
 
 let a_cidr : Ipaddr.Prefix.t t =
   let expand_ipv4 prefix =
@@ -445,8 +445,8 @@ let a_cidr : Ipaddr.Prefix.t t =
     begin match (Ipaddr.to_string ip) ^ "/" ^ (string_of_int mask)
                 |> Ipaddr.Prefix.of_string
       with
-      | None -> fail "invalid CIDR"
-      | Some cidr -> return cidr
+      | Error _ -> fail "invalid CIDR"
+      | Ok cidr -> return cidr
     end
   in
   ( ( ( take_while1 ( function | '0'..'9' | '.'-> true
@@ -456,16 +456,16 @@ let a_cidr : Ipaddr.Prefix.t t =
                 | Some (':'|'a'..'f'|'A'..'F') -> fail "not ipv4"
                 | _ -> return octets end
             ) >>| expand_ipv4 >>| Ipaddr.V4.of_string >>= function
-        | Some x -> a_and_mask (Ipaddr.V4 x)
-        | None -> fail "invalid short ipv4 CIDR"
+        | Ok x -> a_and_mask (Ipaddr.V4 x)
+        | Error _ -> fail "invalid short ipv4 CIDR"
       )
       ) <|> (
       (take_while1 ( function | '0'..'9' | 'a'..'f' | 'A'..'F' | ':' -> true
                               | _ -> false
          ) (* TODO expand_ipv6 *)
        >>| Ipaddr.V6.of_string >>= (function
-           | None -> fail "invalid ipv6 CIDR"
-           | Some x -> a_and_mask (Ipaddr.V6 x)
+           | Error _ -> fail "invalid ipv6 CIDR"
+           | Ok x -> a_and_mask (Ipaddr.V6 x)
          )
       )
     )
