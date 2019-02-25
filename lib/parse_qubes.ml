@@ -52,7 +52,7 @@ type qubes_rule =
 
 let pp_rule fmt {rule; source_ip; number} =
   Fmt.pf fmt "@[<v>SOURCE_IP=%a %04d@,    %a@]"
-    Ipaddr.pp_hum source_ip
+    Ipaddr.pp source_ip
     number
     Parse.pp_pf_rule rule
 
