@@ -1,6 +1,6 @@
 (executables
- (names alcotest_parse)
- (public_names -)
+ (names alcotest_parse fuzz)
+ (public_names - -)
  (libraries pf alcotest logs.fmt))
 
 (alias
@@ -9,3 +9,10 @@
  (action
   (progn
    (run ./alcotest_parse.exe))))
+
+(alias
+ (name fuzz)
+ (deps fuzz.exe input/in output/lo)
+ (action
+  (progn
+   (run afl-fuzz -i input/ -o output/ ./fuzz.exe))))

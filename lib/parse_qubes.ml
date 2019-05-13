@@ -155,7 +155,7 @@ let pp_rule fmt {action; proto; specialtarget; dst; dstports; icmp_type; number}
     Fmt.(option int) icmp_type
     pp_action action
 
-let a_qubes_v4 ~source_ip:_ ~number =
+let a_qubes_v4 ~number =
   string "action=" *> q_action >>= fun action ->
   option (None, `any)
     ( (a_ign_whitespace *> string "dstname=" *>
@@ -193,5 +193,5 @@ let a_qubes_v4 ~source_ip:_ ~number =
       number;
     }
 
-let parse_qubes_v4 ~source_ip ~number entry : (rule, string) result =
-  parse_string (a_qubes_v4 ~source_ip ~number) entry
+let parse_qubes ~number entry : (rule, string) result =
+  parse_string (a_qubes_v4 ~number) entry

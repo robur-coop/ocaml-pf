@@ -12,10 +12,7 @@ let alc_qubes = Alcotest.testable Pf_qubes.Parse_qubes.pp_rule (fun a b -> a = b
 let parse_full a s = Angstrom.(parse_string (a <* end_of_input) s)
 
 
-let qubes str =
-  parse_qubes_v4
-    ~source_ip:Ipaddr.(of_string "127.0.0.1" |> function Ok x -> x | Error _ -> failwith "parse failure")
-    ~number:0 str
+let qubes str = parse_qubes ~number:0 str
 
 let test_qubes_empty () =
   Alcotest.(check @@ result reject string) "empty fails"
