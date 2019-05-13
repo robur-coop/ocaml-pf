@@ -1,5 +1,6 @@
 (library
- (name pf)
+ (name pf_qubes)
  (public_name pf)
- (libraries angstrom fmt ipaddr logs rresult uri.services_full)
+ (modules parse_qubes)
+ (libraries angstrom fmt ipaddr logs rresult)
  (flags :standard -safe-string))
