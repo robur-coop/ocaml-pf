@@ -1,4 +1,4 @@
-let () =
+let go () =
   let buf = Bytes.make 1024 '\000' in
   let rec aux () =
     match Unix.(read stdin buf 0 1024) with
@@ -10,3 +10,5 @@ let () =
       | Ok rule -> Format.printf "%a\n%!" Pf_qubes.Parse_qubes.pp_rule rule; aux ()
   in
   aux ()
+
+let () = AflPersistent.run go
