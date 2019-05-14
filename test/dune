@@ -1,7 +1,7 @@
 (executables
  (names alcotest_parse fuzz)
  (public_names - -)
- (libraries pf alcotest logs.fmt))
+ (libraries pf alcotest logs.fmt afl-persistent))
 
 (alias
  (name runtest)
@@ -12,7 +12,7 @@
 
 (alias
  (name fuzz)
- (deps fuzz.exe input/in output/lo)
+ (deps fuzz.exe input/in input/dns input/ipv6 input/unimplemented output/lo)
  (action
   (progn
    (run afl-fuzz -i input/ -o output/ ./fuzz.exe))))
