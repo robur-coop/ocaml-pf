@@ -37,12 +37,11 @@ let a_mask_bits ~af = a_number_range 0 (match af with | Inet -> 32
                                                       | Inet6 -> 128)
 
 let a_cidr : Ipaddr.Prefix.t t =
-  let expand_ipv4 prefix =
+  let check_ipv4_length prefix =
     let provided_octets = List.length (String.split_on_char '.' prefix) in
-    let padding = String.init ((4 - provided_octets)*2)
-        (function | i when i mod 2 = 0 -> '.'
-                  | _ -> '0')
-    in prefix ^ padding
+    match provided_octets with
+    | 4 -> Ipaddr.V4.of_string prefix
+    | _ -> Error (`Msg "short ipv4")
   in
   let a_and_mask ip =
     let af = match ip with Ipaddr.V4 _ -> Inet
@@ -65,9 +64,9 @@ let a_cidr : Ipaddr.Prefix.t t =
               begin function (* TODO hack to make ipv6 work: *)
                 | Some (':'|'a'..'f'|'A'..'F') -> fail "not ipv4"
                 | _ -> return octets end
-            ) >>| expand_ipv4 >>| Ipaddr.V4.of_string >>= function
-        | Ok x -> a_and_mask (Ipaddr.V4 x)
-        | Error _ -> fail "invalid short ipv4 CIDR"
+            ) >>| check_ipv4_length >>= function
+                | Ok x -> a_and_mask (Ipaddr.V4 x)
+                | Error _ -> fail "invalid short ipv4 CIDR"
       )
       ) <|> (
       (take_while1 ( function | '0'..'9' | 'a'..'f' | 'A'..'F' | ':' -> true
