@@ -22,5 +22,6 @@ depends: [
   "rresult"   { >= "0.5.0" }
   "uri"       { >= "1.9.5" }
   "ipaddr"    { >= "2.8.0" }
+  "bisect_ppx"
 ]
 available: [ocaml-version >= "4.04.2"]
