@@ -137,15 +137,15 @@ let a_include =
 let a_ipv4_dotted_quad =
   take_while1 (function '0'..'9' |'.' -> true | _ -> false) >>= fun ip ->
   match Ipaddr.V4.of_string ip with
-    | None -> fail (Fmt.strf "Invalid IPv4: %S" ip)
-    | Some ip -> return ip
+    | Error `Msg x -> fail (Fmt.strf "Invalid IPv4: %S: %s" ip x)
+    | Ok ip -> return ip
 
 let a_ipv6_coloned_hex =
   take_while1 (function '0'..'9' | ':' | 'a'..'f' | 'A'..'F' -> true
                                  | _ -> false) >>= fun ip ->
   match Ipaddr.V6.of_string ip with
-  | None -> fail (Fmt.strf "Invalid IPv6: %S" ip)
-  | Some ip -> return ip
+  | Error `Msg x -> fail (Fmt.strf "Invalid IPv6: %S: %s" ip x)
+  | Ok ip -> return ip
 
 type pf_bandwidth_spec =
   | B of int
@@ -306,7 +306,7 @@ type pf_address = | IP of Ipaddr.t
                   | Fixed_addr of pf_name_or_macro
 
 let pp_pf_address fmt = function
-  | IP v -> Ipaddr.pp_hum fmt v
+  | IP v -> Ipaddr.pp fmt v
   | Dynamic_addr addr -> Fmt.pf fmt "(%a)" pp_pf_name_or_macro addr
   | Fixed_addr addr -> Fmt.pf fmt "%a" pp_pf_name_or_macro addr
 
@@ -322,7 +322,7 @@ let a_address : pf_address t =
     (encapsulated '(' ')' a_interface_name >>| fun (name,_TODO_if_decoration) ->
        Dynamic_addr name);
     (a_ip >>| fun ip -> IP ip);
-    (a_interface_name >>| fun (name, unhandled_TODO_colons) -> Fixed_addr name);
+    (a_interface_name >>| fun (name,_unhandled_TODO_colons) -> Fixed_addr name);
     (* TODO handle difference between interface-name and interface-group*)
   ]
 
@@ -424,7 +424,7 @@ let pp_if_or_cidr fmt (w: if_or_cidr) =
   match w with
   | Dynamic_if v -> Fmt.pf fmt "(Dynamic_if %a)" pp_pf_name_or_macro v
   | Fixed_if   v -> Fmt.pf fmt "(Fixed_if %a)" pp_pf_name_or_macro v
-  | CIDR       v -> Fmt.pf fmt "(CIDR %a)" Ipaddr.Prefix.pp_hum v
+  | CIDR       v -> Fmt.pf fmt "(CIDR %a)" Ipaddr.Prefix.pp v
 
 let a_cidr : Ipaddr.Prefix.t t =
   let expand_ipv4 prefix =
@@ -445,8 +445,8 @@ let a_cidr : Ipaddr.Prefix.t t =
     begin match (Ipaddr.to_string ip) ^ "/" ^ (string_of_int mask)
                 |> Ipaddr.Prefix.of_string
       with
-      | None -> fail "invalid CIDR"
-      | Some cidr -> return cidr
+      | Error _ -> fail "invalid CIDR"
+      | Ok cidr -> return cidr
     end
   in
   ( ( ( take_while1 ( function | '0'..'9' | '.'-> true
@@ -464,8 +464,8 @@ let a_cidr : Ipaddr.Prefix.t t =
                               | _ -> false
          ) (* TODO expand_ipv6 *)
        >>| Ipaddr.V6.of_string >>= (function
-           | None -> fail "invalid ipv6 CIDR"
-           | Some x -> a_and_mask (Ipaddr.V6 x)
+           | Error _ -> fail "invalid ipv6 CIDR"
+           | Ok x -> a_and_mask (Ipaddr.V6 x)
          )
       )
     )
@@ -1081,7 +1081,6 @@ let empty_pf_rule =
 
 let pp_pf_rule fmt { action; direction; logopts; quick; ifspec;
                      route; af; protospec; hosts; filteropts } =
-  let default = Fmt.unit "Default" in
   Fmt.pf fmt "@[<v>\
     { @[<v>\
       Action: %a ;@ \
@@ -1207,7 +1206,7 @@ struct
           (string "drop" <|> string "return")
           >>| fun pol -> Block_policy pol) ;
         ( string "skip" *> a_whitespace *> string "on" *>
-          a_interface_name >>| fun (ifn, unhandled_TODO_colons) -> Skip_on ifn
+          a_interface_name >>| fun (ifn, _unhandled_TODO_colons) -> Skip_on ifn
         ) ;
         ( string "timeout" *> a_match_or_list '{' a_timeout
             >>| fun timeout -> Timeout timeout ) ;
@@ -1216,7 +1215,7 @@ struct
         ( string "loginterface" *> a_whitespace *>
           ( string "none" *> return None
             <|> some a_interface_name) >>| (function
-                   | Some (ifn, unhandled_TODO_colons) -> Some ifn
+                   | Some (ifn, _unhandled_TODO_colons) -> Some ifn
                    | None -> None) >>| fun ifn -> Loginterface ifn) ;
         ( string "optimization" *> a_whitespace *>
           choice [ string "normal" ;
@@ -1535,7 +1534,7 @@ let a_queue_rule : pf_queue_rule t =
   string "queue" *> a_whitespace *> a_unquoted_string >>= fun name ->
   option None (a_whitespace *> string "on" *> a_whitespace *>
                some a_interface_name ) >>| (function
-                       | Some (on, unhandled_TODO_colons) -> Some on
+                       | Some (on, _unhandled_TODO_colons) -> Some on
                        | None -> None
                ) >>= fun on ->
   a_whitespace *>
@@ -1549,7 +1548,7 @@ type pf_altq_rule =
     subqueues: string list ;
   }
 
-let pp_pf_altq_rule fmt {on ; queueopts ; subqueues} =
+let pp_pf_altq_rule fmt {on ; queueopts = _ ; subqueues} =
   Fmt.pf fmt "@[<v>{ @[<v>on: %a@ queueopts: %a@ \
               subqueues: {@[<v>%a@]}@]}@]"
     pp_pf_ifspec on

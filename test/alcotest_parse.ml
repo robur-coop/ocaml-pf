@@ -19,20 +19,18 @@ let parse_full a s = Angstrom.(parse_string (a <* end_of_input) s)
 
 let host_addr str = (* helper function *)
   Host_addr { negated = false ;
-              if_or_cidr =
-                CIDR (Ipaddr.Prefix.of_string str |> function Some x -> x)
+              if_or_cidr = CIDR (Ipaddr.Prefix.of_string_exn str)
             }
 
 let test_address_ipv6 () =
   Alcotest.(check @@ result alc_address reject) "IS-OK fe80::123"
-    (Ok (IP (match Ipaddr.V6.of_string "fe80::123" with
-         | Some ip -> V6 ip | None -> failwith "Ipaddr.IPv6")))
+    (Ok (IP (V6 (Ipaddr.V6.of_string_exn "fe80::123"))))
     (parse_full Pf.Parse.a_address "fe80::123") ;
 
   Alcotest.(check @@ result alc_address reject) "IS-OK fe80::123%vlans0.123"
     (Ok (IP (match Ipaddr.V6.of_string "fe80::123%vlans0.123" with
-         | Some ip -> V6 ip
-         | None -> Alcotest.fail "Ipaddr.IPv6 not supporting zone ID")))
+         | Ok ip -> V6 ip
+         | Error _ -> Alcotest.fail "Ipaddr.IPv6 not supporting zone ID")))
     (parse_full Pf.Parse.a_address "fe80::123%vlans0.123") ;
 
   (* reject ifspec/vlanspec on global / NON-site-local addr: *)
@@ -41,11 +39,9 @@ let test_address_ipv6 () =
     (Error "TODOwhattoputhere")
     (parse_full Pf.Parse.a_address "1234::123%vlans0.123")
 
-open Pf.Parse_qubes
-
 let qubes str =
   Pf.Parse_qubes.parse_qubes_v4
-    ~source_ip:Ipaddr.(of_string "127.0.0.1" |> function Some x -> x)
+    ~source_ip:Ipaddr.(of_string_exn "127.0.0.1")
     ~number:0 str
 
 let test_qubes_empty () =

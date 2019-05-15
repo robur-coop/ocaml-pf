@@ -14,13 +14,13 @@ let q_action =
 
 let a_dst4 : (pf_af * Ipaddr.V4.Prefix.t) t =
   a_cidr >>= function
-  | Ipaddr.Prefix.(V4 x) -> return (Inet, x)
-  | Ipaddr.Prefix.(V6 _) -> fail "dst4 contains IPv6 CIDR"
+  | Ipaddr.V4 x -> return (Inet, x)
+  | Ipaddr.V6 _ -> fail "dst4 contains IPv6 CIDR"
 
 let a_dst6 : (pf_af * Ipaddr.V6.Prefix.t) t =
   a_cidr >>= function
-  | Ipaddr.Prefix.(V6 x) -> return (Inet6, x)
-  | Ipaddr.Prefix.(V4 _) -> fail "dst6 contains IPv4 CIDR"
+  | Ipaddr.V6 x -> return (Inet6, x)
+  | Ipaddr.V4 _ -> fail "dst6 contains IPv4 CIDR"
 
 let a_proto =
   choice [ string "tcp" *> return `tcp ;
@@ -52,7 +52,7 @@ type qubes_rule =
 
 let pp_rule fmt {rule; source_ip; number} =
   Fmt.pf fmt "@[<v>SOURCE_IP=%a %04d@,    %a@]"
-    Ipaddr.pp_hum source_ip
+    Ipaddr.pp source_ip
     number
     Parse.pp_pf_rule rule
 
@@ -73,7 +73,7 @@ let a_qubes_v4 ~source_ip ~number =
   (* TODO note that it's not specified if multiple of these can be there*)
   option None (a_whitespace *> string "proto=" *> some a_proto) >>= fun proto ->
   option None (a_whitespace *> string "specialtarget=" *>
-               some a_specialtarget) >>= fun specialtarget ->
+               some a_specialtarget) >>= fun _specialtarget ->
   begin match proto with
   | Some (`udp | `tcp) ->
     option [] (a_whitespace *> string "dstports=" *> a_dstports)
@@ -84,8 +84,8 @@ let a_qubes_v4 ~source_ip ~number =
     | Some `icmp ->
       option None (a_whitespace *> string "icmptype=" *> some a_icmptype)
     | None | Some (`tcp | `udp) -> return None
-  end >>= fun icmptype ->
-  option None (a_whitespace *> string "dpi=" *> some a_dpi) >>= fun dpi ->
+  end >>= fun _icmptype ->
+  option None (a_whitespace *> string "dpi=" *> some a_dpi) >>= fun _dpi ->
   end_of_input >>| fun () ->
   let rule =
     { action ;
