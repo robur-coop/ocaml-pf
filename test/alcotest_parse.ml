@@ -48,6 +48,24 @@ let test_qubes_empty () =
   Alcotest.(check @@ result reject string) "empty fails"
     (Error ": not enough input") (qubes "")
 
+let test_qubes_5555 () =
+  Alcotest.(check @@ result pass string) "action=accept dst=5.5.5.5 works"
+    (Ok { Pf.Parse_qubes.source_ip = Ipaddr.(V4 V4.localhost) ;
+          number = 0 ;
+          rule = { Pf.Parse.empty_pf_rule with
+                   action = Pass ; quick = true ;
+                   hosts = From_to
+                       { from_host = `hosts [host_addr "127.0.0.1/32" ];
+                         from_port = [] ; from_os = [] ; to_port = [] ;
+                         to_host = `hosts [host_addr "5.5.5.5/32"] ;
+                       } ; }
+        }) (qubes "action=accept dst4=5.5.5.5")
+
+let test_qubes_5555_5 () =
+  Alcotest.(check @@ result pass string) "action=accept dst=5.5.5.5.5 works"
+    (Error ": invalid IPv4 CIDR") (qubes "action=accept dst4=5.5.5.5.5")
+
+
 let test_qubes_only_action () =
   Alcotest.(check @@ result alc_qubes string) "action=accept"
     (Ok { Pf.Parse_qubes.source_ip = Ipaddr.(V4 V4.localhost) ;
@@ -148,6 +166,8 @@ let test_qubes_unimplemented () =
 let tests =
   [ "parse_qubes [QubesOS v4 firewall format adapter]",
     [ "empty", `Quick, test_qubes_empty ;
+      "ipv4: 5.5.5.5", `Quick, test_qubes_5555 ;
+      "ipv4: extraneous octets 5.5.5.5.5", `Quick, test_qubes_5555_5 ;
       "action=accept", `Quick, test_qubes_only_action ;
       "action=accept dst4=8.8.8.8 proto=udp dstports=53-53", `Quick,
       test_qubes_dns ;

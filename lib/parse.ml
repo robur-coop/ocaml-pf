@@ -429,10 +429,13 @@ let pp_if_or_cidr fmt (w: if_or_cidr) =
 let a_cidr : Ipaddr.Prefix.t t =
   let expand_ipv4 prefix =
     let provided_octets = List.length (String.split_on_char '.' prefix) in
-    let padding = String.init ((4 - provided_octets)*2)
-        (function | i when i mod 2 = 0 -> '.'
-                  | _ -> '0')
-    in prefix ^ padding
+    if provided_octets < 1 || provided_octets > 4 then
+      commit *> fail "invalid IPv4 CIDR"
+    else
+      let padding = String.init ((4 - provided_octets)*2)
+          (function | i when i mod 2 = 0 -> '.'
+                    | _ -> '0')
+      in return (prefix ^ padding)
   in
   let a_and_mask ip =
     let af = match ip with Ipaddr.V4 _ -> Inet
@@ -455,9 +458,9 @@ let a_cidr : Ipaddr.Prefix.t t =
               begin function (* TODO hack to make ipv6 work: *)
                 | Some (':'|'a'..'f'|'A'..'F') -> fail "not ipv4"
                 | _ -> return octets end
-            ) >>| expand_ipv4 >>| Ipaddr.V4.of_string >>= function
-        | Some x -> a_and_mask (Ipaddr.V4 x)
-        | None -> fail "invalid short ipv4 CIDR"
+            ) >>= expand_ipv4 >>| Ipaddr.V4.of_string >>= function
+        | Ok x -> a_and_mask (Ipaddr.V4 x)
+        | Error _ -> fail "invalid short ipv4 CIDR"
       )
       ) <|> (
       (take_while1 ( function | '0'..'9' | 'a'..'f' | 'A'..'F' | ':' -> true
