@@ -157,8 +157,8 @@ let pp_rule fmt {action; proto; specialtarget; dst; dstports; icmp_type; number}
 let a_qubes_v4 ~number =
   string "action=" *> q_action >>= fun action ->
   option (None, `any)
-    ( (a_ign_whitespace *> string "dstname=" *>
-       fail "not handled: dnsname= [TODO how should this work?]" )
+    ( (a_ign_whitespace *> string "dsthost=" *>
+       fail "not handled: dsthost= [TODO how should this work?]" )
       <|>
       (a_whitespace *> choice [
           (string "dst4=" *> a_dst4 >>| fun (af,x) -> af, Ipaddr.V4 x) ;
