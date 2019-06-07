@@ -109,13 +109,13 @@ type range = Range_inclusive of (int * int)
 
 let pp_range f (Range_inclusive (a, b)) = Fmt.pf f "[%d - %d]" a b
 
-let a_dstports : range list t = (* NB only valid with tcp|udp *)
+let a_dstports : range option t = (* NB only valid with tcp|udp *)
   (* should use a_binary_op *)
   a_number_range 0 0xFFFF >>= fun low ->
   char '-' *>
   (* only accept ports that are >= 'low' and < 65336: *)
   a_number_range low 0xFFFF >>| fun high ->
-  [ (Range_inclusive (low, high)) ]
+  Some (Range_inclusive (low, high))
 
 let a_icmptype = a_number_range 0 1000 (* TODO look up max *)
 
@@ -128,13 +128,13 @@ let pp_proto f = function
   | `icmp -> Fmt.string f "icmp"
 
 type rule =
-  { 
+  {
     action : action;
     proto : proto option;
     specialtarget : [ `dns ] option;
     dst : [ `any
           | `hosts of Ipaddr.Prefix.t ]; (* TODO: ipv6, dsthosts *)
-    dstports : range list;
+    dstports : range option;
     icmp_type : int option;
     number : int; (* do we need this? *)
   }
@@ -150,7 +150,7 @@ let pp_rule fmt {action; proto; specialtarget; dst; dstports; icmp_type; number}
     (Fmt.option pp_proto) proto
     (Fmt.option pp_specialtarget) specialtarget
     pp_dst dst
-    (Fmt.list pp_range) dstports
+    (Fmt.option pp_range) dstports
     Fmt.(option int) icmp_type
     pp_action action
 
@@ -172,8 +172,8 @@ let a_qubes_v4 ~number =
                some a_specialtarget) >>= fun specialtarget ->
   begin match proto with
   | Some (`udp | `tcp) ->
-    option [] (a_whitespace *> string "dstports=" *> a_dstports)
-  | None | Some `icmp -> return []
+    option None (a_whitespace *> string "dstports=" *> a_dstports)
+  | None | Some `icmp -> return None
   end >>= fun dstports ->
 
   begin match proto with

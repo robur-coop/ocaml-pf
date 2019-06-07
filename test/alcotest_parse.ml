@@ -25,7 +25,7 @@ let test_qubes_only_action () =
           proto = None;
           specialtarget = None;
           dst = `any;
-          dstports = [];
+          dstports = None;
           icmp_type = None;
         }
     )
@@ -38,7 +38,7 @@ let test_qubes_dns () =
           proto = Some `udp;
           specialtarget = None;
           dst = `hosts (Ipaddr.Prefix.of_string_exn "8.8.8.8/32");
-          dstports = [Range_inclusive (53, 53)];
+          dstports = Some (Range_inclusive (53, 53));
           icmp_type = None;
         }
     )
@@ -47,13 +47,13 @@ let test_qubes_dns () =
 let test_qubes_ipv6 () =
   Alcotest.(check @@ result alc_qubes string)
     "action=drop dst6=2a00:1450:4000::/37 proto=tcp"
-    (Ok { 
+    (Ok {
           number = 0 ;
           action = Drop;
           proto = Some `tcp;
           specialtarget = None;
           dst = `hosts (Ipaddr.Prefix.of_string_exn "2a00:1450:4000::/37" );
-          dstports = [];
+          dstports = None;
           icmp_type = None;
         }
     )
@@ -62,13 +62,13 @@ let test_qubes_ipv6 () =
 let test_qubes_unimplemented () =
   Alcotest.(check @@ result alc_qubes string)
     "action=accept specialtarget=dns"
-    (Ok { 
+    (Ok {
           number = 0 ;
           action = Accept ;
           proto = None;
           specialtarget = Some `dns;
           dst = `any;
-          dstports = [];
+          dstports = None;
           icmp_type = None;
         }
     )
@@ -76,13 +76,13 @@ let test_qubes_unimplemented () =
 
   Alcotest.(check @@ result alc_qubes string)
     "action=drop proto=tcp specialtarget=dns"
-    (Ok { 
+    (Ok {
           number = 0 ;
           action = Drop;
           proto = Some `tcp;
           specialtarget = Some `dns;
           dst = `any;
-          dstports = [];
+          dstports = None;
           icmp_type = None;
         }
     )
