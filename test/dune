@@ -1,7 +1,7 @@
 (executables
  (names alcotest_parse fuzz)
  (public_names - -)
- (libraries pf alcotest logs.fmt afl-persistent))
+ (libraries pf alcotest alcotest-unix logs.fmt afl-persistent))
 
 (alias
  (name runtest)

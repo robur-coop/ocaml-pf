@@ -29,6 +29,9 @@ let a_number =
     | i -> return i
     | exception _ -> fail (Fmt.strf "Invalid number: %S" str)
 
+let a_string =
+  take_while1 (function 'a'..'z' -> true | 'A'..'Z' -> true | '.' -> true | _ -> false)
+
 let a_number_range min' max' =
   a_number >>= function | n when n <= max' && min' <= n -> return n
                         | n -> fail (Fmt.strf "Number out of range: %d" n)
@@ -133,7 +136,8 @@ type rule =
     proto : proto option;
     specialtarget : [ `dns ] option;
     dst : [ `any
-          | `hosts of Ipaddr.Prefix.t ]; (* TODO: ipv6, dsthosts *)
+          | `hosts of Ipaddr.Prefix.t (* TODO change this to iprange *)
+          | `dnsname of string ]; (* TODO: ipv6, dsthosts *)
     dstports : range option;
     icmp_type : int option;
     number : int; (* do we need this? *)
@@ -142,6 +146,7 @@ type rule =
 let pp_specialtarget f _ = Fmt.string f "dns"
 let pp_dst f = function
   | `any -> Fmt.string f "any"
+  | `dnsname name -> Fmt.string f name
   | `hosts prefix -> Ipaddr.Prefix.pp f prefix
 
 let pp_rule fmt {action; proto; specialtarget; dst; dstports; icmp_type; number} =
@@ -156,16 +161,17 @@ let pp_rule fmt {action; proto; specialtarget; dst; dstports; icmp_type; number}
 
 let a_qubes_v4 ~number =
   string "action=" *> q_action >>= fun action ->
-  option (None, `any)
+  option `any
     ( (a_ign_whitespace *> string "dsthost=" *>
-       fail "not handled: dsthost= [TODO how should this work?]" )
+       a_string >>| fun s -> `dnsname s
+      )
       <|>
       (a_whitespace *> choice [
           (string "dst4=" *> a_dst4 >>| fun (af,x) -> af, Ipaddr.V4 x) ;
           (string "dst6=" *> a_dst6 >>| fun (af,x) -> af, Ipaddr.V6 x) ;
-        ] >>| fun (af,cidr) ->
-       (Some af), `hosts cidr)
-    ) >>= fun (_af, dst) ->
+        ] >>| fun (_af,cidr) ->
+       `hosts cidr)
+    ) >>= fun dst ->
   (* TODO note that it's not specified if multiple of these can be there*)
   option None (a_whitespace *> string "proto=" *> some a_proto) >>= fun proto ->
   option None (a_whitespace *> string "specialtarget=" *>
