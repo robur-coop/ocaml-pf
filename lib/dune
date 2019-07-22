@@ -2,6 +2,6 @@
  (name pf_qubes)
  (public_name pf)
  (modules parse_qubes)
- (libraries angstrom fmt ipaddr logs rresult)
+ (libraries angstrom domain-name fmt ipaddr logs rresult)
  (preprocess (pps bisect_ppx -conditional -no-comment-parsing))
  (flags :standard -safe-string))

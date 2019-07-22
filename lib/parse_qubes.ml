@@ -13,9 +13,11 @@ let pp_action f = function | Accept -> Fmt.string f "accept" | Drop -> Fmt.strin
 
 type family = | Inet | Inet6
 
+let is_whitespace = function | ' '| '\t' -> true
+                             | _ -> false
+
 let a_whitespace_unit : unit t =
-  skip (function | ' '| '\t' -> true
-                 | _ -> false)
+  skip is_whitespace
 
 let a_whitespace = skip_many1 a_whitespace_unit
 
@@ -28,9 +30,6 @@ let a_number =
   match int_of_string str with
     | i -> return i
     | exception _ -> fail (Fmt.strf "Invalid number: %S" str)
-
-let a_string =
-  take_while1 (function 'a'..'z' -> true | 'A'..'Z' -> true | '.' -> true | _ -> false)
 
 let a_number_range min' max' =
   a_number >>= function | n when n <= max' && min' <= n -> return n
@@ -130,14 +129,18 @@ let pp_proto f = function
   | `tcp -> Fmt.string f "tcp"
   | `icmp -> Fmt.string f "icmp"
 
+type dst = [
+  | `any
+  | `hosts of Ipaddr.Prefix.t (* TODO change this to iprange *)
+  | `dnsname of [ `host ] Domain_name.t
+]
+
 type rule =
   {
     action : action;
     proto : proto option;
     specialtarget : [ `dns ] option;
-    dst : [ `any
-          | `hosts of Ipaddr.Prefix.t (* TODO change this to iprange *)
-          | `dnsname of string ]; (* TODO: ipv6, dsthosts *)
+    dst : dst;
     dstports : range option;
     icmp_type : int option;
     number : int; (* do we need this? *)
@@ -146,7 +149,7 @@ type rule =
 let pp_specialtarget f _ = Fmt.string f "dns"
 let pp_dst f = function
   | `any -> Fmt.string f "any"
-  | `dnsname name -> Fmt.string f name
+  | `dnsname name -> Domain_name.pp f name
   | `hosts prefix -> Ipaddr.Prefix.pp f prefix
 
 let pp_rule fmt {action; proto; specialtarget; dst; dstports; icmp_type; number} =
@@ -159,12 +162,18 @@ let pp_rule fmt {action; proto; specialtarget; dst; dstports; icmp_type; number}
     Fmt.(option int) icmp_type
     pp_action action
 
+let a_raw_dnsname : dst t =
+  take_while1 (fun c -> not @@ is_whitespace c) >>=
+  fun s -> match Domain_name.of_string s with
+  | Error (`Msg e) -> fail e
+  | Ok raw -> match Domain_name.host raw with
+    | Error (`Msg e) -> fail e
+    | Ok host -> return (`dnsname host)
+
 let a_qubes_v4 ~number =
   string "action=" *> q_action >>= fun action ->
   option `any
-    ( (a_ign_whitespace *> string "dsthost=" *>
-       a_string >>| fun s -> `dnsname s
-      )
+    ( (a_ign_whitespace *> string "dsthost=" *> a_raw_dnsname)
       <|>
       (a_whitespace *> choice [
           (string "dst4=" *> a_dst4 >>| fun (af,x) -> af, Ipaddr.V4 x) ;
@@ -172,7 +181,6 @@ let a_qubes_v4 ~number =
         ] >>| fun (_af,cidr) ->
        `hosts cidr)
     ) >>= fun dst ->
-  (* TODO note that it's not specified if multiple of these can be there*)
   option None (a_whitespace *> string "proto=" *> some a_proto) >>= fun proto ->
   option None (a_whitespace *> string "specialtarget=" *>
                some a_specialtarget) >>= fun specialtarget ->

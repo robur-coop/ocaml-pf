@@ -50,7 +50,7 @@ let test_qubes_dsthost () =
           action = Accept;
           proto = None;
           specialtarget = None;
-          dst = `dnsname "cyber.biz";
+          dst = `dnsname Domain_name.(of_string_exn "cyber.biz" |> host_exn);
           dstports = None;
           icmp_type = None;
         }
