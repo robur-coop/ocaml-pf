@@ -1,12 +1,12 @@
 (executable
  (name alcotest_parse)
  (modules alcotest_parse)
- (libraries pf alcotest-unix logs.fmt))
+ (libraries pf-qubes alcotest logs.fmt))
 
 (executable
  (name fuzz)
  (modules fuzz)
- (libraries pf logs.fmt afl-persistent))
+ (libraries pf-qubes logs.fmt afl-persistent))
 
 (alias
  (name runtest)
