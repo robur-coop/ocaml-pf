@@ -1,23 +1,16 @@
+language: c
+install: wget https://raw.githubusercontent.com/ocaml/ocaml-ci-scripts/master/.travis-docker.sh
+script: bash -ex .travis-docker.sh
+sudo: false
+services:
+  - docker
 env:
   global:
     - PACKAGE="pf"
+    - DISTRO="alpine"
   matrix:
     - OCAML_VERSION=4.07
     - OCAML_VERSION=4.08
     - OCAML_VERSION=4.09
-
-os:
-  - linux
-  - osx
-language: c
-install: wget https://raw.githubusercontent.com/ocaml/ocaml-travisci-skeleton/master/.travis-opam.sh
-sudo: required
-script: bash -ex .travis-opam.sh
-branches:
-  only:
-    - gh-pages
-    - /.*/
-git:
-  depth: 2
 notifications:
   email: false
