@@ -5,6 +5,7 @@ authors:      ["Robur.coop"]
 homepage:     "https://github.com/roburio/ocaml-pf"
 bug-reports:  "https://github.com/roburio/ocaml-pf/issues"
 dev-repo:     "git+https://github.com/roburio/ocaml-pf.git#just-qubes"
+doc:          "https://roburio.github.io/ocaml-pf/just-qubes/"
 license:      "AGPL-3"
 tags: "org:mirage"
 
@@ -28,3 +29,6 @@ depends: [
   "alcotest" { with-test }
   "afl-persistent" { with-test }
 ]
+description: """
+pf-qubes provides a parser for the QubesOS (>=4.0) firewall ruleset syntax.
+"""
