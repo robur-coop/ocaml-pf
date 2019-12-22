@@ -5,6 +5,7 @@ authors:      ["Robur.coop"]
 homepage:     "https://github.com/roburio/ocaml-pf"
 bug-reports:  "https://github.com/roburio/ocaml-pf/issues"
 dev-repo:     "git+https://github.com/roburio/ocaml-pf.git"
+doc:          "https://roburio.github.io/ocaml-pf/head/"
 license:      "AGPL-3"
 tags: "org:mirage"
 
@@ -26,3 +27,7 @@ depends: [
   "ipaddr"    { >= "4.0.0"  }
   "alcotest" {with-test}
 ]
+synopsis: "Angstrom-based parser for the FreeBSD pf firewall configuration format"
+description: """
+A parser for the FreeBSD pf firewall configuration file format.
+"""
