@@ -4,7 +4,7 @@ maintainer:   "team@robur.io"
 authors:      ["Robur.coop"]
 homepage:     "https://github.com/roburio/ocaml-pf"
 bug-reports:  "https://github.com/roburio/ocaml-pf/issues"
-dev-repo:     "git+https://github.com/roburio/ocaml-pf.git#qubes-only"
+dev-repo:     "git+https://github.com/roburio/ocaml-pf.git#just-qubes"
 license:      "AGPL-3"
 tags: "org:mirage"
 
