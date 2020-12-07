@@ -207,4 +207,4 @@ let a_qubes_v4 ~number =
     }
 
 let parse_qubes ~number entry : (rule, string) result =
-  parse_string (a_qubes_v4 ~number) entry
+  parse_string ~consume:Consume.All (a_qubes_v4 ~number) entry
