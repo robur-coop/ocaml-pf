@@ -4,7 +4,7 @@ authors:      ["Joe Hill"]
 homepage:     "https://github.com/cfcs/ocaml-pf"
 bug-reports:  "https://github.com/cfcs/ocaml-pf/issues"
 dev-repo:     "git+https://github.com/cfcs/ocaml-pf.git"
-doc:          "https://roburio.github.io/ocaml-pf/head/"
+doc:          "https://robur-coop.github.io/ocaml-pf/head/"
 license:      "gopher://license.to.chill"
 tags: "org:mirage"
 
