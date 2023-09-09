@@ -1,11 +1,11 @@
 opam-version: "2.0"
 synopsis: "FreeBSD pf firewall ruleset library"
-maintainer:   "team@robur.io"
+maintainer:   "team@robur.coop"
 authors:      ["Robur.coop"]
 homepage:     "https://github.com/roburio/ocaml-pf"
 bug-reports:  "https://github.com/roburio/ocaml-pf/issues"
 dev-repo:     "git+https://github.com/roburio/ocaml-pf.git"
-doc:          "https://roburio.github.io/ocaml-pf/head/"
+doc:          "https://robur-coop.github.io/ocaml-pf/head/"
 license:      "AGPL-3"
 tags: "org:mirage"
 
