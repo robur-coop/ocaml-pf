@@ -23,7 +23,6 @@ depends: [
   "rresult"   { >= "0.5.0" }
   "uri"       { >= "1.9.5" }
   "ipaddr"    { >= "2.8.0" }
-  "bisect_ppx"
 ]
 synopsis: "Angstrom-based parser for the FreeBSD pf firewall configuration format"
 description: """
