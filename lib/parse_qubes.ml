@@ -29,11 +29,11 @@ let a_number =
   take_while1 (function '0'..'9' -> true | _ -> false) >>= fun str ->
   match int_of_string str with
     | i -> return i
-    | exception _ -> fail (Fmt.strf "Invalid number: %S" str)
+    | exception _ -> fail (Fmt.str "Invalid number: %S" str)
 
 let a_number_range min' max' =
   a_number >>= function | n when n <= max' && min' <= n -> return n
-                        | n -> fail (Fmt.strf "Number out of range: %d" n)
+                        | n -> fail (Fmt.str "Number out of range: %d" n)
 
 let a_mask_bits ~af = a_number_range 0 (match af with | Inet -> 32
                                                       | Inet6 -> 128)
