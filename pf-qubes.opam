@@ -25,9 +25,11 @@ depends: [
   "rresult"   { >= "0.5.0" }
   "uri"       { >= "1.9.5" }
   "ipaddr"    { >= "2.8.0" }
+  "domain-name"
   "alcotest" { with-test }
   "afl-persistent" { with-test }
 ]
 description: """
 pf-qubes provides a parser for the QubesOS (>=4.0) firewall ruleset syntax.
 """
+x-maintenance-intent: [ "(latest)" ]
